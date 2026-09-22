@@ -5,6 +5,7 @@ FinAI is a polished personal finance analysis dashboard built for a BCA AI/ML pr
 ## Features
 
 - Demo mode with several months of fictional salary, expenses, investments, and unusual transactions
+- Email/password signup and login through managed Clerk authentication
 - Manual transaction create, edit, delete, and search
 - CSV import with flexible column matching and validation
 - Dynamic dashboard KPIs, category breakdowns, monthly income/expense trends, savings trend, and recent activity
@@ -13,7 +14,7 @@ FinAI is a polished personal finance analysis dashboard built for a BCA AI/ML pr
 - Financial insights generated from the live transaction dataset
 - Stock portfolio tracking with manually entered current prices and calculated allocation/P&L
 - Downloadable transaction CSV, summary CSV, analysis CSV, and printable HTML report
-- Browser persistence using localStorage, so a demo survives navigation and refreshes
+- Browser persistence using user-scoped localStorage, so each signed-in workspace survives navigation and refreshes without mixing accounts
 
 ## Technologies
 
@@ -46,7 +47,7 @@ pnpm install
 pnpm --filter @workspace/finai run dev
 ```
 
-The browser app is designed to run without credentials, bank connections, or external APIs. Click **Load demo data** to populate the dashboard immediately, or start with a manual transaction / CSV upload.
+The browser app does not request banking credentials, bank connections, or external market APIs. Create an account or sign in, then click **Load demo data** to populate the dashboard immediately, or start with a manual transaction / CSV upload.
 
 ## Project structure
 

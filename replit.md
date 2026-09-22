@@ -33,13 +33,15 @@ FinAI is a local-first personal finance analyzer that turns transactions, CSV im
 - The browser mirrors the academic ML concepts for instant feedback; `ml/finai_ml.py` provides the requested Scikit-learn implementation.
 - Portfolio prices are manually entered snapshots and are never presented as live market data.
 - Demo data is opt-in from the welcome state and persists after it is loaded.
+- Clerk email/password authentication protects the finance workspace; local ledger and portfolio data are namespaced per signed-in user.
 
 ## Product
 
 - Dashboard with live income, expense, savings, category, and portfolio metrics
 - Manual transaction CRUD and validated CSV upload with preview
 - Expense filters, searchable ledger, charts, anomaly flags, classifier playground, portfolio P&L, insights, and downloads
-- Local browser persistence; demo mode seeds fictional multi-month data without requiring credentials
+- Clerk email/password sign-in and signup with a public landing page
+- User-scoped local browser persistence; demo mode seeds fictional multi-month data after sign-in
 
 ## User preferences
 
@@ -49,6 +51,7 @@ FinAI is a local-first personal finance analyzer that turns transactions, CSV im
 
 - `pnpm --filter @workspace/finai run typecheck` is the reliable app check; Vite builds need workflow-provided `PORT` and `BASE_PATH` or explicit shell values.
 - No live stock feed is used; current prices are clearly labeled manual snapshots.
+- Auth uses Clerk's browser cookie session and the API server's `/api/__clerk` production proxy; do not add bearer-token handling to web requests.
 
 ## Pointers
 

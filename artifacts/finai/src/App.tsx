@@ -11,10 +11,96 @@ import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart,
   Pie, PieChart as RePieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
-import { Link, Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
+import { ClerkProvider, SignIn, SignUp, useClerk as useClerkOriginal, useUser as useUserOriginal } from '@clerk/react';
+import { publishableKeyFromHost } from '@clerk/react/internal';
+import { shadcn } from '@clerk/themes';
+import { Link, Redirect, Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 import { ErrorBoundary } from '@/components/error-boundary';
 
 const queryClient = new QueryClient();
+const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
+const clerkPubKey = publishableKeyFromHost(window.location.hostname, import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
+const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
+
+// LOCAL DEMO MODE: Clerk authentication is disabled for local development.
+// To restore Clerk later, remove this local hook block and use the original
+// useUser/useClerk hooks, then restore ClerkProviderWithRoutes in App().
+const LOCAL_DEMO_MODE = true;
+
+function useUser() {
+  if (LOCAL_DEMO_MODE) {
+    return {
+      user: {
+        id: 'local-demo-user',
+        firstName: 'FinSco',
+        primaryEmailAddress: { emailAddress: 'demo@finsco.local' },
+      },
+      isLoaded: true,
+      isSignedIn: true,
+    } as const;
+  }
+  return useUserOriginal();
+}
+
+function useClerk() {
+  if (LOCAL_DEMO_MODE) return { signOut: async () => {} } as const;
+  return useClerkOriginal();
+}
+
+const clerkAppearance = {
+  theme: shadcn,
+  cssLayerName: 'clerk',
+  options: {
+    logoPlacement: 'inside' as const,
+    logoLinkUrl: basePath || '/',
+    logoImageUrl: `${window.location.origin}${basePath}/logo.svg`,
+    socialButtonsPlacement: 'bottom' as const,
+    socialButtonsVariant: 'blockButton' as const,
+  },
+  variables: {
+    colorPrimary: '#874536',
+    colorForeground: '#25313a',
+    colorMutedForeground: '#6f7678',
+    colorBackground: '#fbf8f1',
+    colorInput: '#fffdf9',
+    colorInputForeground: '#25313a',
+    colorDanger: '#b24f3f',
+    colorNeutral: '#d9d1c4',
+    fontFamily: 'Manrope, sans-serif',
+    borderRadius: '8px',
+  },
+  elements: {
+    rootBox: 'auth-clerk-root',
+    cardBox: 'auth-card-box',
+    card: '!shadow-none !border-0 !bg-transparent !rounded-none',
+    footer: '!shadow-none !border-0 !bg-transparent !rounded-none',
+    headerTitle: 'auth-header-title',
+    headerSubtitle: 'auth-header-subtitle',
+    socialButtonsBlockButtonText: 'auth-social-text',
+    formFieldLabel: 'auth-form-label',
+    footerActionLink: 'auth-footer-link',
+    footerActionText: 'auth-footer-text',
+    dividerText: 'auth-divider-text',
+    identityPreviewEditButton: 'auth-edit-button',
+    formFieldSuccessText: 'auth-success-text',
+    alertText: 'auth-alert-text',
+    logoBox: 'auth-logo-box',
+    logoImage: 'auth-logo-image',
+    socialButtonsBlockButton: 'auth-social-button auth-social-hidden',
+    formButtonPrimary: 'auth-form-button',
+    formFieldInput: 'auth-form-input',
+    footerAction: 'auth-footer-action',
+    dividerLine: 'auth-divider-line',
+    alert: 'auth-alert',
+    otpCodeFieldInput: 'auth-otp-input',
+    formFieldRow: 'auth-form-row',
+    main: 'auth-main',
+  },
+};
+
+function stripBase(path: string) {
+  return basePath && path.startsWith(basePath) ? path.slice(basePath.length) || '/' : path;
+}
 
 type TransactionType = 'Income' | 'Expense';
 type Category = 'Food' | 'Shopping' | 'Transportation' | 'Bills' | 'Entertainment' | 'Healthcare' | 'Education' | 'Investment' | 'Rent' | 'Salary' | 'Other';
@@ -105,14 +191,30 @@ function useFinance() {
 }
 
 function FinanceProvider({ children }: { children: ReactNode }) {
-  const [transactions, setTransactions] = useState<Transaction[]>(() => {
-    try { return JSON.parse(localStorage.getItem('finai-transactions-v2') || 'null') || []; } catch { return []; }
-  });
-  const [holdings, setHoldings] = useState<Holding[]>(() => {
-    try { return JSON.parse(localStorage.getItem('finai-holdings-v2') || 'null') || []; } catch { return []; }
-  });
-  useEffect(() => { localStorage.setItem('finai-transactions-v2', JSON.stringify(transactions)); }, [transactions]);
-  useEffect(() => { localStorage.setItem('finai-holdings-v2', JSON.stringify(holdings)); }, [holdings]);
+  const { user, isLoaded } = useUser();
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [holdings, setHoldings] = useState<Holding[]>([]);
+  const [loadedForUser, setLoadedForUser] = useState<string | null>(null);
+  const userStorageKey = user?.id ? `:${user.id}` : '';
+  useEffect(() => {
+    if (!isLoaded || !user?.id) return;
+    try {
+      setTransactions(JSON.parse(localStorage.getItem(`finai-transactions-v2${userStorageKey}`) || 'null') || []);
+      setHoldings(JSON.parse(localStorage.getItem(`finai-holdings-v2${userStorageKey}`) || 'null') || []);
+    } catch {
+      setTransactions([]);
+      setHoldings([]);
+    }
+    setLoadedForUser(user.id);
+  }, [isLoaded, user?.id, userStorageKey]);
+  useEffect(() => {
+    if (loadedForUser !== user?.id) return;
+    localStorage.setItem(`finai-transactions-v2${userStorageKey}`, JSON.stringify(transactions));
+  }, [loadedForUser, transactions, user?.id, userStorageKey]);
+  useEffect(() => {
+    if (loadedForUser !== user?.id) return;
+    localStorage.setItem(`finai-holdings-v2${userStorageKey}`, JSON.stringify(holdings));
+  }, [loadedForUser, holdings, user?.id, userStorageKey]);
   const value: FinanceContextValue = {
     transactions, holdings,
     addTransaction: (transaction) => setTransactions((current) => [{ ...transaction, id: uid() }, ...current]),
@@ -127,7 +229,7 @@ function FinanceProvider({ children }: { children: ReactNode }) {
 }
 
 const navItems = [
-  { href: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/workspace', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/transactions', label: 'Add Transactions', icon: FileSpreadsheet },
   { href: '/analyzer', label: 'Expense Analyzer', icon: BarChart3 },
   { href: '/ai-analysis', label: 'AI / ML Analysis', icon: BrainCircuit },
@@ -139,7 +241,12 @@ const navItems = [
 function Shell({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const { signOut } = useClerk();
+  const { user } = useUser();
   const pageTitle = navItems.find((item) => item.href === location)?.label || 'Dashboard';
+  const email = user?.primaryEmailAddress?.emailAddress || '';
+  const displayName = user?.firstName || email.split('@')[0] || 'FinAI user';
+  const initials = displayName.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
   return (
     <div className="app-shell">
       <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>
@@ -155,7 +262,8 @@ function Shell({ children }: { children: ReactNode }) {
         <div className="sidebar-spacer" />
         <div className="sidebar-foot">
           <div className="nav-label" style={{ padding: 0 }}>Local workspace</div>
-          <div className="student-chip"><div className="avatar">AK</div><p><strong>Arjun K.</strong>BCA · final semester</p></div>
+          <div className="student-chip"><div className="avatar">{initials}</div><p><strong>{displayName}</strong><span>{email || 'Personal finance workspace'}</span></p></div>
+          <button className="sidebar-signout" type="button" onClick={() => signOut({ redirectUrl: basePath || '/' })}>Sign out</button>
         </div>
       </aside>
       <div className="main-column">
@@ -390,10 +498,75 @@ function Reports() {
 
 function PrinterIcon() { return <FileBarChart2 size={17} />; }
 
-function NotFound() { return <main className="page"><section className="card empty"><div className="empty-icon"><Gauge size={19} /></div><h2>That view is not on the map.</h2><p>Use the FinAI navigation to return to your command center.</p><Link className="btn btn-primary" href="/" data-testid="link-return-dashboard"><LayoutDashboard size={14} /> Return to dashboard</Link></section></main>; }
+function NotFound() { return <main className="page"><section className="card empty"><div className="empty-icon"><Gauge size={19} /></div><h2>That view is not on the map.</h2><p>Use the FinAI navigation to return to your command center.</p><Link className="btn btn-primary" href="/workspace" data-testid="link-return-dashboard"><LayoutDashboard size={14} /> Return to dashboard</Link></section></main>; }
+
+function PublicLanding() {
+  return <main className="auth-landing">
+    <div className="auth-landing-nav">
+      <Link href="/" className="brand auth-brand"><div className="brand-mark">F</div><div className="brand-name">fin<span>ai</span></div></Link>
+      <div className="auth-landing-actions"><Link href="/sign-in" className="auth-text-link">Sign in</Link><Link href="/sign-up" className="btn btn-primary">Create account</Link></div>
+    </div>
+    <section className="auth-hero">
+      <div className="auth-hero-copy">
+        <div className="eyebrow">A private view of your money</div>
+        <h1>Make your finances easier to understand.</h1>
+        <p>FinAI turns your transaction history into clear patterns, explainable signals, and practical next steps. Create a workspace to keep your analysis in one place.</p>
+        <div className="auth-hero-actions"><Link href="/sign-up" className="btn btn-primary">Start your workspace <ArrowUpRight size={15} /></Link><Link href="/sign-in" className="auth-text-link">Already have an account <ArrowUpRight size={14} /></Link></div>
+        <div className="auth-hero-note"><ShieldCheck size={14} /><span>Local-first analysis · no bank credentials required</span></div>
+      </div>
+      <div className="auth-hero-panel">
+        <div className="auth-panel-kicker">Your financial signal</div>
+        <div className="auth-panel-number">₹28,500</div>
+        <div className="auth-panel-caption">monthly income tracked</div>
+        <div className="auth-panel-rule" />
+        <div className="auth-panel-row"><span>Largest signal</span><strong>Rent · 31%</strong></div>
+        <div className="auth-panel-row"><span>Buffer this month</span><strong className="auth-positive">+₹12,840</strong></div>
+        <div className="auth-panel-bars"><span style={{ height: '45%' }} /><span style={{ height: '62%' }} /><span style={{ height: '54%' }} /><span style={{ height: '78%' }} /><span style={{ height: '69%' }} /><span style={{ height: '91%' }} /></div>
+        <div className="auth-panel-footer"><span>Six month view</span><span>Updated locally</span></div>
+      </div>
+    </section>
+  </main>;
+}
+
+function AuthPage({ mode }: { mode: 'sign-in' | 'sign-up' }) {
+  const isSignIn = mode === 'sign-in';
+  return <main className="auth-page">
+    <div className="auth-page-header"><Link href="/" className="brand auth-brand"><div className="brand-mark">F</div><div className="brand-name">fin<span>ai</span></div></Link><Link href="/" className="auth-back-link">Back to FinAI</Link></div>
+    <div className="auth-card-wrap">
+      <div className="auth-card-intro"><div className="eyebrow">{isSignIn ? 'Welcome back' : 'Begin with FinAI'}</div><h1>{isSignIn ? 'Sign in to your workspace.' : 'Create your workspace.'}</h1><p>{isSignIn ? 'Continue where you left off with your financial analysis.' : 'A private, local-first space for making your money easier to read.'}</p></div>
+      {isSignIn ? <SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} fallbackRedirectUrl={`${basePath}/workspace`} /> : <SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} fallbackRedirectUrl={`${basePath}/workspace`} />}
+    </div>
+  </main>;
+}
 
 function RoutedErrorBoundary({ children }: { children: ReactNode }) { const [location] = useLocation(); return <ErrorBoundary resetKey={location}>{children}</ErrorBoundary>; }
-function Router() { return <RoutedErrorBoundary><Shell><Switch><Route path="/" component={Dashboard} /><Route path="/transactions" component={AddTransactions} /><Route path="/analyzer" component={ExpenseAnalyzer} /><Route path="/ai-analysis" component={AIAnalysis} /><Route path="/portfolio" component={Portfolio} /><Route path="/insights" component={Insights} /><Route path="/reports" component={Reports} /><Route component={NotFound} /></Switch></Shell></RoutedErrorBoundary>; }
-function App() { return <QueryClientProvider client={queryClient}><FinanceProvider><WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><Router /></WouterRouter></FinanceProvider></QueryClientProvider>; }
+function WorkspaceRouter() {
+  const { isLoaded, isSignedIn } = useUser();
+  if (!isLoaded) return <div className="auth-loading"><div className="brand auth-brand"><div className="brand-mark">F</div><div className="brand-name">fin<span>ai</span></div></div><p>Preparing your workspace…</p></div>;
+  if (!isSignedIn) return <Redirect to="/" />;
+  return <FinanceProvider><RoutedErrorBoundary><Shell><Switch><Route path="/workspace" component={Dashboard} /><Route path="/transactions" component={AddTransactions} /><Route path="/analyzer" component={ExpenseAnalyzer} /><Route path="/ai-analysis" component={AIAnalysis} /><Route path="/portfolio" component={Portfolio} /><Route path="/insights" component={Insights} /><Route path="/reports" component={Reports} /><Route component={NotFound} /></Switch></Shell></RoutedErrorBoundary></FinanceProvider>;
+}
+function HomeRedirect() {
+  const { isLoaded, isSignedIn } = useUser();
+  if (!isLoaded) return <div className="auth-loading"><div className="brand auth-brand"><div className="brand-mark">F</div><div className="brand-name">fin<span>ai</span></div></div><p>Preparing FinAI…</p></div>;
+  return isSignedIn ? <Redirect to="/workspace" /> : <PublicLanding />;
+}
+function AppRoutes() {
+  return <Switch><Route path="/" component={HomeRedirect} /><Route path="/sign-in/*?" component={() => <AuthPage mode="sign-in" />} /><Route path="/sign-up/*?" component={() => <AuthPage mode="sign-up" />} /><Route component={WorkspaceRouter} /></Switch>;
+}
+function ClerkProviderWithRoutes() {
+  const [, setLocation] = useLocation();
+  return <ClerkProvider publishableKey={clerkPubKey} proxyUrl={clerkProxyUrl} appearance={clerkAppearance} signInUrl={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} localization={{ signIn: { start: { title: 'Welcome back', subtitle: 'Sign in to access your workspace' } }, signUp: { start: { title: 'Create your workspace', subtitle: 'Keep your financial signal in one place' } } }} routerPush={(to) => setLocation(stripBase(to))} routerReplace={(to) => setLocation(stripBase(to), { replace: true })}>
+    <QueryClientProvider client={queryClient}><AppRoutes /></QueryClientProvider>
+  </ClerkProvider>;
+}
+function App() {
+  // Local demo mode bypasses Clerk while keeping the full Clerk setup above
+  // intact for later reactivation.
+  if (LOCAL_DEMO_MODE) {
+    return <WouterRouter base={basePath}><QueryClientProvider client={queryClient}><AppRoutes /></QueryClientProvider></WouterRouter>;
+  }
+  return <WouterRouter base={basePath}><ClerkProviderWithRoutes /></WouterRouter>;
+}
 
 export default App;
