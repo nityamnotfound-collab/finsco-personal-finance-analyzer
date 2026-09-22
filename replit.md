@@ -1,6 +1,6 @@
-# [Project name]
+# FinAI
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+FinAI is a local-first personal finance analyzer that turns transactions, CSV imports, and manual portfolio snapshots into explainable charts, insights, and AI/ML analysis.
 
 ## Run & Operate
 
@@ -22,23 +22,33 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/finai/src/App.tsx` — FinAI shell, live calculations, local persistence, CSV parsing, charts, and reports
+- `artifacts/finai/src/index.css` — FinAI visual system and responsive layout
+- `ml/finai_ml.py` — runnable Scikit-learn reference implementation
+- `README.md` — demo, architecture, and academic explanation
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- The demo is local-first so a student can present it without bank credentials, API keys, or an unreliable third-party feed.
+- The browser mirrors the academic ML concepts for instant feedback; `ml/finai_ml.py` provides the requested Scikit-learn implementation.
+- Portfolio prices are manually entered snapshots and are never presented as live market data.
+- Demo data is opt-in from the welcome state and persists after it is loaded.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- Dashboard with live income, expense, savings, category, and portfolio metrics
+- Manual transaction CRUD and validated CSV upload with preview
+- Expense filters, searchable ledger, charts, anomaly flags, classifier playground, portfolio P&L, insights, and downloads
+- Local browser persistence; demo mode seeds fictional multi-month data without requiring credentials
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- The user needs a polished, demo-ready BCA AI/ML project with functionality prioritized over unnecessary complexity.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- `pnpm --filter @workspace/finai run typecheck` is the reliable app check; Vite builds need workflow-provided `PORT` and `BASE_PATH` or explicit shell values.
+- No live stock feed is used; current prices are clearly labeled manual snapshots.
 
 ## Pointers
 

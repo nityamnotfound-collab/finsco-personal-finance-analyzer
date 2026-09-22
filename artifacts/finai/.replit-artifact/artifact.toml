@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "FinAI – Personal Finance Analyzer"
+description = "A polished AI-assisted personal finance analyzer for exploring transactions, spending patterns, anomalies, insights, portfolio holdings, and downloadable reports."
+version = "1.0.0"
+id = "artifacts/finai"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25846
+
+[services.development]
+run = "pnpm --filter @workspace/finai run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/finai", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/finai/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25846"
+BASE_PATH = "/"
