@@ -100,9 +100,10 @@ button { cursor: pointer; }
   display: flex; flex-direction: column; z-index: 20;
 }
 .brand { display: flex; align-items: center; gap: 11px; padding: 5px 12px 30px; }
-.brand-mark { width: 32px; height: 32px; border-radius: 10px; background: hsl(163 56% 58%); color: hsl(211 35% 17%); display: grid; place-items: center; font-family: var(--app-font-display); font-weight: 700; font-size: 15px; }
+.brand-mark { width: 32px; height: 32px; border-radius: 10px; background: hsl(163 56% 58%); color: hsl(211 35% 17%); display: grid; place-items: center; font-family: var(--app-font-display); font-weight: 700; font-size: 11px; letter-spacing: -.08em; }
 .brand-name { font-family: var(--app-font-display); letter-spacing: -.05em; font-size: 19px; font-weight: 700; }
 .brand-name span { color: hsl(163 56% 58%); }
+.brand-wordmark { display: block; width: 154px; height: 42px; flex: 0 0 154px; background: url("/finsco-logo.png") center 47% / 220px 220px no-repeat; }
 .nav-label { padding: 0 12px 9px; font-size: 10px; letter-spacing: .13em; color: hsl(211 12% 69%); text-transform: uppercase; font-weight: 700; }
 .nav-list { display: grid; gap: 5px; }
 .nav-item { color: hsl(211 12% 74%); display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 10px; text-decoration: none; font-size: 12px; font-weight: 600; transition: background .2s ease, color .2s ease, transform .2s ease; }
@@ -287,8 +288,6 @@ tbody tr:hover { background: hsl(var(--primary) / .035); }
 .auth-landing { padding: 29px clamp(20px, 5vw, 72px) 70px; }
 .auth-landing-nav, .auth-page-header { max-width: 1240px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 22px; }
 .auth-brand { padding: 0; text-decoration: none; color: #25313a; }
-.auth-brand .brand-mark { background: #874536; color: #fbf8f1; }
-.auth-brand .brand-name span { color: #874536; }
 .auth-landing .eyebrow, .auth-page .eyebrow { color: #874536; }
 .auth-landing .btn-primary, .auth-page .btn-primary { background: #874536; color: #fbf8f1; box-shadow: 0 5px 14px hsl(13 38% 38% / .18); }
 .auth-landing .btn-primary:hover, .auth-page .btn-primary:hover { background: #6e352b; box-shadow: 0 8px 20px hsl(13 38% 38% / .24); }
