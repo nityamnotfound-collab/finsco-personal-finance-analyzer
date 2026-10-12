@@ -4,7 +4,7 @@ import {
   Activity, AlertTriangle, ArrowDownLeft, ArrowUpRight, BarChart3, Bell, BrainCircuit,
   BriefcaseBusiness, CalendarDays, Check, ChevronDown, CircleDollarSign, Download,
   FileBarChart2, FileSpreadsheet, Filter, FolderOpen, Gauge, Landmark, LayoutDashboard,
-  Menu, Pencil, PieChart, Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles,
+  Menu, Monitor, Moon, Pencil, PieChart, Plus, RefreshCw, Search, Settings2, ShieldCheck, Sparkles, Sun,
   Trash2, TrendingDown, TrendingUp, Upload, Wallet, X, Zap,
 } from 'lucide-react';
 import {
@@ -21,6 +21,49 @@ const queryClient = new QueryClient();
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
 const clerkPubKey = publishableKeyFromHost(window.location.hostname, import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
 const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
+
+type ThemePreference = 'light' | 'dark' | 'system';
+type ThemeContextValue = { theme: ThemePreference; setTheme: (theme: ThemePreference) => void };
+const ThemeContext = createContext<ThemeContextValue | null>(null);
+
+function ThemeProvider({ children }: { children: ReactNode }) {
+  const [theme, setTheme] = useState<ThemePreference>(() => {
+    try {
+      const saved = localStorage.getItem('finsco-theme-preference');
+      return saved === 'light' || saved === 'dark' || saved === 'system' ? saved : 'system';
+    } catch {
+      return 'system';
+    }
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const systemPreference = window.matchMedia('(prefers-color-scheme: dark)');
+    const applyTheme = () => {
+      root.classList.toggle('dark', theme === 'dark' || (theme === 'system' && systemPreference.matches));
+    };
+
+    applyTheme();
+    try {
+      localStorage.setItem('finsco-theme-preference', theme);
+    } catch {
+      // Theme still works for this session when browser storage is unavailable.
+    }
+
+    if (theme === 'system') {
+      systemPreference.addEventListener('change', applyTheme);
+      return () => systemPreference.removeEventListener('change', applyTheme);
+    }
+  }, [theme]);
+
+  return <ThemeContext.Provider value={{ theme, setTheme }}>{children}</ThemeContext.Provider>;
+}
+
+function useTheme() {
+  const value = useContext(ThemeContext);
+  if (!value) throw new Error('Theme context is unavailable');
+  return value;
+}
 
 // LOCAL DEMO MODE: Clerk authentication is disabled for local development.
 // To restore Clerk later, remove this local hook block and use the original
@@ -243,6 +286,8 @@ function Shell({ children }: { children: ReactNode }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const { signOut } = useClerk();
   const { user } = useUser();
+  const { theme, setTheme } = useTheme();
+  const ThemeIcon = theme === 'light' ? Sun : theme === 'dark' ? Moon : Monitor;
   const pageTitle = navItems.find((item) => item.href === location)?.label || 'Dashboard';
   const email = user?.primaryEmailAddress?.emailAddress || '';
   const displayName = user?.firstName || email.split('@')[0] || 'Fin$co user';
@@ -273,6 +318,21 @@ function Shell({ children }: { children: ReactNode }) {
             <div><div className="topbar-kicker">Fin$co / Workspace</div><div className="topbar-title">{pageTitle}</div></div>
           </div>
           <div className="topbar-actions">
+            <label className="theme-control">
+              <ThemeIcon size={14} aria-hidden="true" />
+              <select
+                className="theme-select"
+                aria-label="Color theme"
+                title="Choose light, dark, or system theme"
+                value={theme}
+                onChange={(event) => setTheme(event.target.value as ThemePreference)}
+                data-testid="select-theme"
+              >
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+                <option value="system">System</option>
+              </select>
+            </label>
             <span className="tag teal"><span style={{ width: 5, height: 5, borderRadius: '50%', background: 'currentColor' }} /> Local data</span>
             <button className="icon-button" onClick={() => window.location.reload()} aria-label="Refresh analysis" data-testid="button-refresh-data"><RefreshCw size={15} /></button>
           </div>
@@ -564,9 +624,9 @@ function App() {
   // Local demo mode bypasses Clerk while keeping the full Clerk setup above
   // intact for later reactivation.
   if (LOCAL_DEMO_MODE) {
-    return <WouterRouter base={basePath}><QueryClientProvider client={queryClient}><AppRoutes /></QueryClientProvider></WouterRouter>;
+    return <ThemeProvider><WouterRouter base={basePath}><QueryClientProvider client={queryClient}><AppRoutes /></QueryClientProvider></WouterRouter></ThemeProvider>;
   }
-  return <WouterRouter base={basePath}><ClerkProviderWithRoutes /></WouterRouter>;
+  return <ThemeProvider><WouterRouter base={basePath}><ClerkProviderWithRoutes /></WouterRouter></ThemeProvider>;
 }
 
 export default App;
