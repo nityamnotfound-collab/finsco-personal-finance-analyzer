@@ -146,7 +146,7 @@ function stripBase(path: string) {
 type TransactionType = 'Income' | 'Expense';
 type Category = 'Food' | 'Shopping' | 'Transportation' | 'Bills' | 'Entertainment' | 'Healthcare' | 'Education' | 'Investment' | 'Rent' | 'Salary' | 'Other';
 type Transaction = { id: string; date: string; description: string; amount: number; type: TransactionType; category: Category };
-type Holding = { id: string; symbol: string; name: string; shares: number; purchasePrice: number; currentPrice: number; currency?: string; fxToInr?: number; currentPriceAsOf?: string };
+type Holding = { id: string; symbol: string; name: string; shares: number; purchasePrice: number; currentPrice: number; currency?: string; fxToInr?: number; fxAsOf?: string; currentPriceAsOf?: string };
 
 const categories: Category[] = ['Food', 'Shopping', 'Transportation', 'Bills', 'Entertainment', 'Healthcare', 'Education', 'Investment', 'Rent', 'Salary', 'Other'];
 const money = (value: number) => `₹${Math.abs(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
@@ -697,9 +697,9 @@ function Portfolio() {
     setQuoteStatus('loading'); setQuoteAsOf(''); setQuoteMessage('');
     void fetch(`${basePath}/api/stocks/quote?symbol=${encodeURIComponent(stock.symbol)}&currency=${encodeURIComponent(stockCurrency)}`, { signal: controller.signal })
       .then(async (response) => {
-        const data = await response.json() as { price?: number; currency?: string; fxToInr?: number; latestTradingDay?: string; error?: string };
+        const data = await response.json() as { price?: number; currency?: string; fxToInr?: number; fxAsOf?: string; latestTradingDay?: string; error?: string };
         if (!response.ok || !data.price || !Number.isFinite(data.price)) throw new Error(data.error || 'Unable to retrieve a current quote.');
-        setDraft((current) => ({ ...current, currentPrice: data.price!, currency: data.currency || stockCurrency, fxToInr: data.fxToInr || 1, currentPriceAsOf: data.latestTradingDay || '' }));
+        setDraft((current) => ({ ...current, currentPrice: data.price!, currency: data.currency || stockCurrency, fxToInr: data.fxToInr || 1, fxAsOf: data.fxAsOf || '', currentPriceAsOf: data.latestTradingDay || '' }));
         setQuoteAsOf(data.latestTradingDay || ''); setQuoteStatus('loaded');
       })
       .catch((error: unknown) => {

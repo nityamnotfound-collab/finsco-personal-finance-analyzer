@@ -21,17 +21,16 @@ export default async function handler(request, response) {
     const price = Number(quote?.['05. price']);
     if (!Number.isFinite(price) || price <= 0) return response.status(404).json({ error: 'No latest market price was found for this stock.' });
     let fxToInr = 1;
+    let fxAsOf = '';
     if (currency === 'USD') {
-      const fxUrl = new URL('https://www.alphavantage.co/query');
-      fxUrl.searchParams.set('function', 'CURRENCY_EXCHANGE_RATE');
-      fxUrl.searchParams.set('from_currency', 'USD');
-      fxUrl.searchParams.set('to_currency', 'INR');
-      fxUrl.searchParams.set('apikey', key);
-      const fxResponse = await fetch(fxUrl, { signal: AbortSignal.timeout(8000) });
+      // Alpha Vantage's free quota is shared across quote and FX requests. Use
+      // a separate daily reference-rate source so a valid stock quote is not
+      // lost when Alpha Vantage throttles the second request.
+      const fxResponse = await fetch('https://api.frankfurter.dev/v2/rate/USD/INR', { signal: AbortSignal.timeout(8000) });
       const fxData = await fxResponse.json();
-      if (!fxResponse.ok || fxData.Note || fxData.Information) return response.status(429).json({ error: 'Currency conversion is temporarily rate limited. Try again shortly.' });
-      fxToInr = Number(fxData['Realtime Currency Exchange Rate']?.['5. Exchange Rate']);
-      if (!Number.isFinite(fxToInr) || fxToInr <= 0) return response.status(502).json({ error: 'Could not get the USD to INR exchange rate.' });
+      fxToInr = Number(fxData?.rate);
+      fxAsOf = typeof fxData?.date === 'string' ? fxData.date : '';
+      if (!fxResponse.ok || !Number.isFinite(fxToInr) || fxToInr <= 0) return response.status(502).json({ error: 'Could not get the latest USD to INR reference rate.' });
     }
     response.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300');
     return response.status(200).json({
@@ -39,6 +38,7 @@ export default async function handler(request, response) {
       price,
       currency,
       fxToInr,
+      fxAsOf,
       latestTradingDay: quote['07. latest trading day'] || '',
     });
   } catch {
