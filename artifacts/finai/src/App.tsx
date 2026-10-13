@@ -466,7 +466,7 @@ function Dashboard() {
     {toast && <div className="toast"><Check size={15} />{toast}</div>}
   </main>;
   return <main className="page">
-    <PageHead eyebrow={`${new Date().toLocaleDateString('en-IN', { weekday: 'long', day: '2-digit', month: 'long' })} · personal finance lab`} title="Good morning, Arjun." description="Your money has a signal. Fin$co turns the daily noise into a clear view of what is moving, what is unusual, and what is worth your attention." action={<Link href="/transactions" className="btn btn-primary" data-testid="link-add-transaction"><Plus size={15} /> Add transaction</Link>} />
+    <PageHead eyebrow={`${new Date().toLocaleDateString('en-IN', { weekday: 'long', day: '2-digit', month: 'long' })} · personal finance lab`} title="Your finances, at a glance." description="Your money has a signal. Fin$co turns the daily noise into a clear view of what is moving, what is unusual, and what is worth your attention." action={<Link href="/transactions" className="btn btn-primary" data-testid="link-add-transaction"><Plus size={15} /> Add transaction</Link>} />
     <div className="stats-grid">
       <MetricCard label="Available balance" value={money(balance)} foot="Net across all tracked activity" tone="positive" />
       <MetricCard label="Income tracked" value={money(totalIncome)} foot={`${transactions.filter((t) => t.type === 'Income').length} deposits in the workspace`} />
