@@ -68,7 +68,7 @@ function useTheme() {
 // LOCAL DEMO MODE: Clerk authentication is disabled for local development.
 // To restore Clerk later, remove this local hook block and use the original
 // useUser/useClerk hooks, then restore ClerkProviderWithRoutes in App().
-const LOCAL_DEMO_MODE = true;
+const LOCAL_DEMO_MODE = false;
 
 function useUser() {
   if (LOCAL_DEMO_MODE) {
