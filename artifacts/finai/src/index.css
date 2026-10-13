@@ -317,6 +317,10 @@ tbody tr:hover { background: hsl(var(--primary) / .035); }
 .auth-landing .btn-primary, .auth-page .btn-primary { background: #874536; color: #fbf8f1; box-shadow: 0 5px 14px hsl(13 38% 38% / .18); }
 .auth-landing .btn-primary:hover, .auth-page .btn-primary:hover { background: #6e352b; box-shadow: 0 8px 20px hsl(13 38% 38% / .24); }
 .auth-landing-actions { display: flex; align-items: center; gap: 23px; }
+.auth-page-header-actions { display: flex; align-items: center; gap: 20px; }
+.auth-landing .currency-control, .auth-page .currency-control { border-color: hsl(25 18% 78%); background: hsl(39 38% 96%); color: #59636a; }
+.auth-landing .currency-select, .auth-page .currency-select { color: #25313a; }
+.auth-landing .currency-error, .auth-page .currency-error { color: #874536; }
 .auth-text-link, .auth-back-link { color: #874536; font-size: 12px; font-weight: 800; text-decoration: none; }
 .auth-text-link:hover, .auth-back-link:hover { color: #633126; }
 .auth-text-link { display: inline-flex; align-items: center; gap: 7px; border-bottom: 1px solid hsl(13 38% 38% / .35); padding-bottom: 3px; }
@@ -403,6 +407,7 @@ tbody tr:hover { background: hsl(var(--primary) / .035); }
   .form-grid .full { grid-column: auto; }
   .toast { left: 16px; right: 16px; bottom: 16px; }
   .auth-landing-nav, .auth-page-header { align-items: flex-start; }
+  .auth-landing-actions, .auth-page-header-actions { gap: 10px; }
   .auth-hero { grid-template-columns: 1fr; margin-top: 72px; }
   .auth-hero-copy h1 { font-size: 50px; }
   .auth-hero-panel { max-width: 480px; width: 100%; }

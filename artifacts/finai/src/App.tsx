@@ -86,6 +86,20 @@ function useCurrency() {
   return value;
 }
 
+function CurrencyControl() {
+  const { currency, setCurrency, fxAsOf, currencyError } = useCurrency();
+  return <>
+    <label className="currency-control" title={currency === 'USD' && fxAsOf ? `USD conversion uses a daily reference rate dated ${fxAsOf}` : 'Choose the currency used to display amounts'}>
+      <CircleDollarSign size={14} aria-hidden="true" />
+      <select className="currency-select" aria-label="Display currency" value={currency} onChange={(event) => void setCurrency(event.target.value as DisplayCurrency)} data-testid="select-currency">
+        <option value="INR">INR ₹</option>
+        <option value="USD">USD $</option>
+      </select>
+    </label>
+    {currencyError && <span className="currency-error" role="status">{currencyError}</span>}
+  </>;
+}
+
 function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<ThemePreference>(() => {
     try {
@@ -355,7 +369,6 @@ function Shell({ children }: { children: ReactNode }) {
   const { signOut } = useClerk();
   const { user } = useUser();
   const { theme, setTheme } = useTheme();
-  const { currency, setCurrency, fxAsOf, currencyError } = useCurrency();
   const ThemeIcon = theme === 'light' ? Sun : theme === 'dark' ? Moon : Monitor;
   const pageTitle = navItems.find((item) => item.href === location)?.label || 'Dashboard';
   const email = user?.primaryEmailAddress?.emailAddress || '';
@@ -387,20 +400,7 @@ function Shell({ children }: { children: ReactNode }) {
             <div><div className="topbar-kicker">Fin$co / Workspace</div><div className="topbar-title">{pageTitle}</div></div>
           </div>
           <div className="topbar-actions">
-            <label className="currency-control" title={currency === 'USD' && fxAsOf ? `USD conversion uses a daily reference rate dated ${fxAsOf}` : 'Choose the currency used to display amounts'}>
-              <CircleDollarSign size={14} aria-hidden="true" />
-              <select
-                className="currency-select"
-                aria-label="Display currency"
-                value={currency}
-                onChange={(event) => void setCurrency(event.target.value as DisplayCurrency)}
-                data-testid="select-currency"
-              >
-                <option value="INR">INR ₹</option>
-                <option value="USD">USD $</option>
-              </select>
-            </label>
-            {currencyError && <span className="currency-error" role="status">{currencyError}</span>}
+            <CurrencyControl />
             <label className="theme-control">
               <ThemeIcon size={14} aria-hidden="true" />
               <select
@@ -853,7 +853,7 @@ function PublicLanding() {
   return <main className="auth-landing">
     <div className="auth-landing-nav">
       <Link href="/" className="brand auth-brand"><span className="brand-wordmark" role="img" aria-label="Fin$co" /></Link>
-      <div className="auth-landing-actions"><Link href="/sign-in" className="auth-text-link">Sign in</Link><Link href="/sign-up" className="btn btn-primary">Create account</Link></div>
+      <div className="auth-landing-actions"><CurrencyControl /><Link href="/sign-in" className="auth-text-link">Sign in</Link><Link href="/sign-up" className="btn btn-primary">Create account</Link></div>
     </div>
     <section className="auth-hero">
       <div className="auth-hero-copy">
@@ -880,7 +880,7 @@ function PublicLanding() {
 function AuthPage({ mode }: { mode: 'sign-in' | 'sign-up' }) {
   const isSignIn = mode === 'sign-in';
   return <main className="auth-page">
-    <div className="auth-page-header"><Link href="/" className="brand auth-brand"><span className="brand-wordmark" role="img" aria-label="Fin$co" /></Link><Link href="/" className="auth-back-link">Back to Fin$co</Link></div>
+    <div className="auth-page-header"><Link href="/" className="brand auth-brand"><span className="brand-wordmark" role="img" aria-label="Fin$co" /></Link><div className="auth-page-header-actions"><CurrencyControl /><Link href="/" className="auth-back-link">Back to Fin$co</Link></div></div>
     <div className="auth-card-wrap">
       <div className="auth-card-intro"><div className="eyebrow">{isSignIn ? 'Welcome back' : 'Begin with Fin$co'}</div><h1>{isSignIn ? 'Sign in to your workspace.' : 'Create your workspace.'}</h1><p>{isSignIn ? 'Continue where you left off with your financial analysis.' : 'A private, local-first space for making your money easier to read.'}</p></div>
       {isSignIn ? <SignIn routing="path" path={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} fallbackRedirectUrl={`${basePath}/workspace`} /> : <SignUp routing="path" path={`${basePath}/sign-up`} signInUrl={`${basePath}/sign-in`} fallbackRedirectUrl={`${basePath}/workspace`} />}
