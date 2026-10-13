@@ -146,11 +146,14 @@ function stripBase(path: string) {
 type TransactionType = 'Income' | 'Expense';
 type Category = 'Food' | 'Shopping' | 'Transportation' | 'Bills' | 'Entertainment' | 'Healthcare' | 'Education' | 'Investment' | 'Rent' | 'Salary' | 'Other';
 type Transaction = { id: string; date: string; description: string; amount: number; type: TransactionType; category: Category };
-type Holding = { id: string; symbol: string; name: string; shares: number; purchasePrice: number; currentPrice: number };
+type Holding = { id: string; symbol: string; name: string; shares: number; purchasePrice: number; currentPrice: number; currency?: string; fxToInr?: number; currentPriceAsOf?: string };
 
 const categories: Category[] = ['Food', 'Shopping', 'Transportation', 'Bills', 'Entertainment', 'Healthcare', 'Education', 'Investment', 'Rent', 'Salary', 'Other'];
 const money = (value: number) => `₹${Math.abs(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 const money2 = (value: number) => `₹${Math.abs(value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const holdingFxToInr = (holding: Pick<Holding, 'currency' | 'fxToInr'>) => holding.currency === 'USD' ? holding.fxToInr || 1 : 1;
+const holdingValueInr = (holding: Holding) => holding.shares * holding.currentPrice * holdingFxToInr(holding);
+const holdingCostInr = (holding: Holding) => holding.shares * holding.purchasePrice * holdingFxToInr(holding);
 const shortDate = (date: string) => new Date(`${date}T00:00:00`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
 const dateInput = (daysAgo = 0) => { const d = new Date(); d.setDate(d.getDate() - daysAgo); return d.toISOString().slice(0, 10); };
 const signed = (transaction: Transaction) => transaction.type === 'Income' ? transaction.amount : -transaction.amount;
@@ -355,7 +358,7 @@ function Dashboard() {
   const totalIncome = transactions.filter((t) => t.type === 'Income').reduce((sum, t) => sum + t.amount, 0);
   const totalExpense = transactions.filter((t) => t.type === 'Expense').reduce((sum, t) => sum + t.amount, 0);
   const balance = totalIncome - totalExpense;
-  const portfolioValue = holdings.reduce((sum, h) => sum + h.shares * h.currentPrice, 0);
+  const portfolioValue = holdings.reduce((sum, h) => sum + holdingValueInr(h), 0);
   const months = useMemo(() => {
     const result: { month: string; income: number; expense: number; net: number }[] = [];
     for (let i = 5; i >= 0; i -= 1) {
@@ -572,7 +575,7 @@ function AIAnalysis() {
 }
 
 type HoldingDraft = Omit<Holding, 'id'>;
-type StockSuggestion = { symbol: string; name: string; market: 'India' | 'US'; aliases: string[] };
+type StockSuggestion = { symbol: string; name: string; market: 'India' | 'US'; currency?: string; aliases?: string[] };
 const stockSuggestions: StockSuggestion[] = [
   { symbol: 'RELIANCE.NS', name: 'Reliance Industries', market: 'India', aliases: ['reliance', 'ril', 'reliance industries limited'] },
   { symbol: 'TCS.NS', name: 'Tata Consultancy Services', market: 'India', aliases: ['tcs', 'tata consultancy'] },
@@ -613,16 +616,24 @@ const stockSuggestions: StockSuggestion[] = [
 function Portfolio() {
   const { holdings, addHolding, updateHolding, deleteHolding } = useFinance();
   const [editing, setEditing] = useState<Holding | 'new' | null>(null);
-  const [draft, setDraft] = useState<HoldingDraft>({ symbol: '', name: '', shares: 1, purchasePrice: 0, currentPrice: 0 });
+  const [draft, setDraft] = useState<HoldingDraft>({ symbol: '', name: '', shares: 1, purchasePrice: 0, currentPrice: 0, currency: 'INR', fxToInr: 1 });
   const [stockQuery, setStockQuery] = useState('');
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [activeSuggestion, setActiveSuggestion] = useState(0);
+  const [liveSuggestions, setLiveSuggestions] = useState<StockSuggestion[]>([]);
+  const [isSearchingStocks, setIsSearchingStocks] = useState(false);
+  const [stockSearchMessage, setStockSearchMessage] = useState('');
+  const [quoteStatus, setQuoteStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
+  const [quoteAsOf, setQuoteAsOf] = useState('');
+  const [quoteMessage, setQuoteMessage] = useState('');
+  const quoteController = useRef<AbortController | null>(null);
+  const selectedStockRef = useRef<StockSuggestion | null>(null);
   const suggestionId = 'portfolio-stock-suggestions';
-  const suggestions = useMemo(() => {
+  const localSuggestions = useMemo(() => {
     const query = stockQuery.trim().toLowerCase();
     if (!query) return [];
     return stockSuggestions.map((stock) => {
-      const fields = [stock.symbol, stock.symbol.replace(/\.NS$/i, ''), stock.name, ...stock.aliases];
+      const fields = [stock.symbol, stock.symbol.replace(/\.NS$/i, ''), stock.name, ...(stock.aliases || [])];
       const rank = fields.reduce((best, field) => {
         const value = field.toLowerCase();
         return Math.min(best, value === query ? 0 : value.startsWith(query) ? 1 : value.includes(query) ? 2 : 99);
@@ -632,16 +643,77 @@ function Portfolio() {
       .sort((a, b) => a.rank - b.rank || a.stock.name.localeCompare(b.stock.name))
       .slice(0, 7).map((item) => item.stock);
   }, [stockQuery]);
-  const totalInvested = holdings.reduce((s, h) => s + h.shares * h.purchasePrice, 0);
-  const currentValue = holdings.reduce((s, h) => s + h.shares * h.currentPrice, 0);
+  const suggestions = useMemo(() => {
+    const seen = new Set<string>();
+    return [...liveSuggestions, ...localSuggestions].filter((stock) => {
+      if (seen.has(stock.symbol.toUpperCase())) return false;
+      seen.add(stock.symbol.toUpperCase());
+      return true;
+    }).slice(0, 7);
+  }, [liveSuggestions, localSuggestions]);
+  useEffect(() => {
+    const query = stockQuery.trim();
+    if (!editing || query.length < 2) { setLiveSuggestions([]); setIsSearchingStocks(false); setStockSearchMessage(''); return; }
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setIsSearchingStocks(true);
+      setStockSearchMessage('');
+      try {
+        const response = await fetch(`${basePath}/api/stocks/search?q=${encodeURIComponent(query)}`, { signal: controller.signal });
+        if (!response.ok) throw new Error('Stock search is not available right now.');
+        const data = await response.json() as { results?: Array<{ symbol: string; name: string; region: string; currency: string }> };
+        setLiveSuggestions((data.results || []).filter((stock) => stock.region === 'India' || stock.region === 'United States').map((stock) => ({
+          symbol: stock.symbol,
+          name: stock.name,
+          market: stock.region === 'India' ? 'India' : 'US',
+          currency: stock.currency,
+        })));
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setLiveSuggestions([]);
+          setStockSearchMessage(error instanceof Error ? error.message : 'Online stock search is unavailable.');
+        }
+      } finally {
+        if (!controller.signal.aborted) setIsSearchingStocks(false);
+      }
+    }, 500);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [editing, stockQuery]);
+  const totalInvested = holdings.reduce((s, h) => s + holdingCostInr(h), 0);
+  const currentValue = holdings.reduce((s, h) => s + holdingValueInr(h), 0);
   const pnl = currentValue - totalInvested;
-  const open = (holding?: Holding) => { setEditing(holding || 'new'); setDraft(holding ? { symbol: holding.symbol, name: holding.name, shares: holding.shares, purchasePrice: holding.purchasePrice, currentPrice: holding.currentPrice } : { symbol: '', name: '', shares: 1, purchasePrice: 0, currentPrice: 0 }); setStockQuery(holding ? `${holding.name} (${holding.symbol})` : ''); setSuggestionsOpen(false); };
+  const open = (holding?: Holding) => { quoteController.current?.abort(); setEditing(holding || 'new'); setDraft(holding ? { symbol: holding.symbol, name: holding.name, shares: holding.shares, purchasePrice: holding.purchasePrice, currentPrice: holding.currentPrice, currency: holding.currency || 'INR', fxToInr: holding.fxToInr || 1, currentPriceAsOf: holding.currentPriceAsOf } : { symbol: '', name: '', shares: 1, purchasePrice: 0, currentPrice: 0, currency: 'INR', fxToInr: 1 }); setStockQuery(holding ? `${holding.name} (${holding.symbol})` : ''); setQuoteStatus(holding?.currentPrice ? 'loaded' : 'idle'); setQuoteAsOf(holding?.currentPriceAsOf || ''); setQuoteMessage(''); setSuggestionsOpen(false); };
   const set = (key: keyof HoldingDraft, value: string | number) => setDraft((current) => ({ ...current, [key]: value }));
-  const selectStock = (stock: StockSuggestion) => { set('symbol', stock.symbol); set('name', stock.name); setStockQuery(`${stock.name} (${stock.symbol})`); setSuggestionsOpen(false); setActiveSuggestion(0); };
-  return <main className="page"><PageHead eyebrow="Portfolio / manual market snapshot" title="See your ownership clearly." description="Keep a simple, honest record of what you hold. Prices are intentionally manual in this demo, so the calculations stay transparent and offline." action={<button className="btn btn-primary" onClick={() => open()} data-testid="button-new-holding"><Plus size={15} /> Add holding</button>} />
-    <div className="stats-grid"><MetricCard label="Current value" value={money(currentValue)} foot={`${holdings.length} holdings tracked`} tone="positive" /><MetricCard label="Cost basis" value={money(totalInvested)} foot="Total purchase value" /><MetricCard label="Unrealized P&L" value={`${pnl >= 0 ? '+' : '-'}${money(pnl)}`} foot={totalInvested ? `${pnl / totalInvested * 100 >= 0 ? '+' : ''}${(pnl / totalInvested * 100).toFixed(1)}% since purchase` : 'Add a holding'} tone={pnl >= 0 ? 'positive' : 'warn'} /><MetricCard label="Largest position" value={holdings[0]?.symbol || '—'} foot={holdings[0] ? money(holdings[0].shares * holdings[0].currentPrice) : 'No holdings'} /></div>
-    <div className="allocation-layout"><section className="card"><div className="card-header"><div><h2>Allocation</h2><p>Current value by holding</p></div><PieChart size={17} color="hsl(var(--primary))" /></div><div className="card-body"><div style={{ height: 190 }}><ResponsiveContainer width="100%" height="100%"><RePieChart><Pie data={holdings.map((h) => ({ name: h.symbol, value: h.shares * h.currentPrice }))} dataKey="value" innerRadius={52} outerRadius={75} paddingAngle={3} stroke="none">{holdings.map((h, i) => <Cell key={h.id} fill={['#2f8c79', '#e9785f', '#d4a843', '#718b9a'][i % 4]} />)}</Pie><Tooltip formatter={(value: number) => money(value)} contentStyle={{ background: '#24343e', border: 0, borderRadius: 8, color: '#fbf7ed', fontSize: 10 }} /></RePieChart></ResponsiveContainer></div><div className="list">{holdings.map((h, i) => <div className="list-row" key={h.id}><div className="row-meta"><span className="category-dot" style={{ background: ['#2f8c79', '#e9785f', '#d4a843', '#718b9a'][i % 4] }} /><span className="row-name">{h.symbol}</span></div><span className="row-value">{money(h.shares * h.currentPrice)}</span></div>)}</div>{holdings.length === 0 && <div className="empty"><div className="empty-icon"><BriefcaseBusiness size={18} /></div><p>Add your first holding to see allocation.</p></div>}</div></section><section className="card"><div className="card-header"><div><h2>Holdings</h2><p>Manual entry · no live market feed</p></div><span className="tag teal"><Landmark size={11} /> Offline</span></div><div className="card-body" style={{ paddingTop: 13 }}><div className="table-wrap"><table><thead><tr><th>Asset</th><th>Shares</th><th>Value</th><th>P&amp;L</th><th /></tr></thead><tbody>{holdings.map((h) => { const value = h.shares * h.currentPrice; const gain = value - h.shares * h.purchasePrice; return <tr key={h.id} data-testid={`row-holding-${h.id}`}><td><strong>{h.symbol}</strong><div className="row-caption">{h.name}</div></td><td className="mono">{h.shares}</td><td className="holding-value">{money(value)}</td><td className={gain >= 0 ? 'pnl-positive amount' : 'pnl-negative amount'}>{gain >= 0 ? '+' : '-'}{money(gain)}</td><td><div className="actions"><button className="action-icon" onClick={() => open(h)} aria-label={`Edit ${h.symbol}`} data-testid={`button-edit-holding-${h.id}`}><Pencil size={14} /></button><button className="action-icon delete" onClick={() => { if (window.confirm(`Delete ${h.symbol} holding?`)) deleteHolding(h.id); }} aria-label={`Delete ${h.symbol}`} data-testid={`button-delete-holding-${h.id}`}><Trash2 size={14} /></button></div></td></tr>; })}</tbody></table></div></div></section></div>
-    {editing && <div className="modal-backdrop" role="dialog"><div className="modal"><div className="modal-head"><div><div className="eyebrow">Portfolio position</div><h2>{editing === 'new' ? 'Add a holding' : 'Edit a holding'}</h2></div><button className="icon-button" onClick={() => setEditing(null)} aria-label="Close holding form" data-testid="button-close-holding-form"><X size={16} /></button></div><div className="modal-body"><div className="form-grid"><div className="field full"><label htmlFor="input-holding-stock-search">Find a stock</label><div className="stock-search"><Search size={15} aria-hidden="true" /><input id="input-holding-stock-search" className="input" placeholder="Search by company, ticker, or alias…" autoComplete="off" role="combobox" aria-autocomplete="list" aria-expanded={suggestionsOpen && suggestions.length > 0} aria-controls={suggestionId} aria-activedescendant={suggestionsOpen && suggestions.length ? `${suggestionId}-${activeSuggestion}` : undefined} value={stockQuery} onFocus={() => setSuggestionsOpen(true)} onBlur={() => setSuggestionsOpen(false)} onChange={(e) => { setStockQuery(e.target.value); setSuggestionsOpen(true); setActiveSuggestion(0); set('symbol', ''); set('name', ''); }} onKeyDown={(e) => { if (!suggestionsOpen || !suggestions.length) return; if (e.key === 'ArrowDown') { e.preventDefault(); setActiveSuggestion((i) => (i + 1) % suggestions.length); } else if (e.key === 'ArrowUp') { e.preventDefault(); setActiveSuggestion((i) => (i - 1 + suggestions.length) % suggestions.length); } else if (e.key === 'Enter') { e.preventDefault(); selectStock(suggestions[activeSuggestion]); } else if (e.key === 'Escape') setSuggestionsOpen(false); }} data-testid="input-holding-stock-search" />{suggestionsOpen && stockQuery.trim() && <div className="stock-suggestions" id={suggestionId} role="listbox" aria-label="Stock suggestions">{suggestions.length ? suggestions.map((stock, index) => <button type="button" id={`${suggestionId}-${index}`} role="option" aria-selected={index === activeSuggestion} className={`stock-suggestion ${index === activeSuggestion ? 'active' : ''}`} key={`${stock.market}-${stock.symbol}`} onMouseDown={(e) => e.preventDefault()} onMouseEnter={() => setActiveSuggestion(index)} onClick={() => selectStock(stock)}><span className="stock-suggestion-main"><strong>{stock.name}</strong><span>{stock.symbol}</span></span><span className="tag">{stock.market}</span></button>) : <div className="stock-suggestion-empty">No matches in the India and US stock list yet.</div>}</div>}</div><span className="row-caption">Suggestions match company names, ticker symbols, and common aliases.</span></div><div className="field"><label>Shares</label><input className="input" type="number" min="0.01" step="0.01" value={draft.shares || ''} onChange={(e) => set('shares', Number(e.target.value))} data-testid="input-holding-shares" /></div><div className="field"><label>Purchase price</label><input className="input" type="number" min="0" step="0.01" value={draft.purchasePrice || ''} onChange={(e) => set('purchasePrice', Number(e.target.value))} data-testid="input-holding-purchase-price" /></div><div className="field full"><label>Current price snapshot</label><input className="input" type="number" min="0" step="0.01" value={draft.currentPrice || ''} onChange={(e) => set('currentPrice', Number(e.target.value))} data-testid="input-holding-current-price" /></div></div><div className="modal-actions"><button className="btn btn-quiet" onClick={() => setEditing(null)} data-testid="button-cancel-holding">Cancel</button><button className="btn btn-primary" disabled={!draft.symbol || !draft.name || draft.shares <= 0 || draft.currentPrice <= 0} onClick={() => { editing === 'new' ? addHolding(draft) : updateHolding(editing.id, draft); setEditing(null); }} data-testid="button-save-holding"><Check size={14} /> Save position</button></div></div></div></div>}
+  const selectStock = (stock: StockSuggestion) => {
+    selectedStockRef.current = stock;
+    quoteController.current?.abort();
+    const controller = new AbortController();
+    quoteController.current = controller;
+    const stockCurrency = stock.currency || (stock.market === 'India' ? 'INR' : 'USD');
+    setDraft((current) => ({ ...current, symbol: stock.symbol, name: stock.name, currentPrice: 0, currency: stockCurrency, fxToInr: 1, currentPriceAsOf: '' }));
+    setStockQuery(`${stock.name} (${stock.symbol})`);
+    setSuggestionsOpen(false);
+    setActiveSuggestion(0);
+    setQuoteStatus('loading'); setQuoteAsOf(''); setQuoteMessage('');
+    void fetch(`${basePath}/api/stocks/quote?symbol=${encodeURIComponent(stock.symbol)}&currency=${encodeURIComponent(stockCurrency)}`, { signal: controller.signal })
+      .then(async (response) => {
+        const data = await response.json() as { price?: number; currency?: string; fxToInr?: number; latestTradingDay?: string; error?: string };
+        if (!response.ok || !data.price || !Number.isFinite(data.price)) throw new Error(data.error || 'Unable to retrieve a current quote.');
+        setDraft((current) => ({ ...current, currentPrice: data.price!, currency: data.currency || stockCurrency, fxToInr: data.fxToInr || 1, currentPriceAsOf: data.latestTradingDay || '' }));
+        setQuoteAsOf(data.latestTradingDay || ''); setQuoteStatus('loaded');
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setQuoteStatus('error');
+        setQuoteMessage(error instanceof Error ? error.message : 'Unable to retrieve a current quote.');
+      });
+  };
+  const currency = draft.currency || 'INR';
+  const formatPrice = (value: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency, maximumFractionDigits: 2 }).format(value);
+  return <main className="page"><PageHead eyebrow="Portfolio / market quotes" title="See your ownership clearly." description="Search India and US stocks, enter your shares and purchase price, and compare them with the latest available market quote." action={<button className="btn btn-primary" onClick={() => open()} data-testid="button-new-holding"><Plus size={15} /> Add holding</button>} />
+    <div className="stats-grid"><MetricCard label="Current value" value={money(currentValue)} foot={`${holdings.length} holdings tracked`} tone="positive" /><MetricCard label="Cost basis" value={money(totalInvested)} foot="Total purchase value" /><MetricCard label="Unrealized P&L" value={`${pnl >= 0 ? '+' : '-'}${money(pnl)}`} foot={totalInvested ? `${pnl / totalInvested * 100 >= 0 ? '+' : ''}${(pnl / totalInvested * 100).toFixed(1)}% since purchase` : 'Add a holding'} tone={pnl >= 0 ? 'positive' : 'warn'} /><MetricCard label="Largest position" value={holdings[0]?.symbol || '—'} foot={holdings[0] ? money(holdingValueInr(holdings[0])) : 'No holdings'} /></div>
+    <div className="allocation-layout"><section className="card"><div className="card-header"><div><h2>Allocation</h2><p>Current value by holding</p></div><PieChart size={17} color="hsl(var(--primary))" /></div><div className="card-body"><div style={{ height: 190 }}><ResponsiveContainer width="100%" height="100%"><RePieChart><Pie data={holdings.map((h) => ({ name: h.symbol, value: holdingValueInr(h) }))} dataKey="value" innerRadius={52} outerRadius={75} paddingAngle={3} stroke="none">{holdings.map((h, i) => <Cell key={h.id} fill={['#2f8c79', '#e9785f', '#d4a843', '#718b9a'][i % 4]} />)}</Pie><Tooltip formatter={(value: number) => money(value)} contentStyle={{ background: '#24343e', border: 0, borderRadius: 8, color: '#fbf7ed', fontSize: 10 }} /></RePieChart></ResponsiveContainer></div><div className="list">{holdings.map((h, i) => <div className="list-row" key={h.id}><div className="row-meta"><span className="category-dot" style={{ background: ['#2f8c79', '#e9785f', '#d4a843', '#718b9a'][i % 4] }} /><span className="row-name">{h.symbol}</span></div><span className="row-value">{money(holdingValueInr(h))}</span></div>)}</div>{holdings.length === 0 && <div className="empty"><div className="empty-icon"><BriefcaseBusiness size={18} /></div><p>Add your first holding to see allocation.</p></div>}</div></section><section className="card"><div className="card-header"><div><h2>Holdings</h2><p>Latest available market prices · may be delayed</p></div><span className="tag teal"><Landmark size={11} /> Market data</span></div><div className="card-body" style={{ paddingTop: 13 }}><div className="table-wrap"><table><thead><tr><th>Asset</th><th>Shares</th><th>Value</th><th>P&amp;L</th><th /></tr></thead><tbody>{holdings.map((h) => { const value = holdingValueInr(h); const gain = value - holdingCostInr(h); return <tr key={h.id} data-testid={`row-holding-${h.id}`}><td><strong>{h.symbol}</strong><div className="row-caption">{h.name} · {h.currency || 'INR'} quote {h.currentPriceAsOf || 'saved'}</div></td><td className="mono">{h.shares}</td><td className="holding-value">{money(value)}</td><td className={gain >= 0 ? 'pnl-positive amount' : 'pnl-negative amount'}>{gain >= 0 ? '+' : '-'}{money(gain)}</td><td><div className="actions"><button className="action-icon" onClick={() => open(h)} aria-label={`Edit ${h.symbol}`} data-testid={`button-edit-holding-${h.id}`}><Pencil size={14} /></button><button className="action-icon delete" onClick={() => { if (window.confirm(`Delete ${h.symbol} holding?`)) deleteHolding(h.id); }} aria-label={`Delete ${h.symbol}`} data-testid={`button-delete-holding-${h.id}`}><Trash2 size={14} /></button></div></td></tr>; })}</tbody></table></div></div></section></div>
+    {editing && <div className="modal-backdrop" role="dialog"><div className="modal"><div className="modal-head"><div><div className="eyebrow">Portfolio position</div><h2>{editing === 'new' ? 'Add a holding' : 'Edit a holding'}</h2></div><button className="icon-button" onClick={() => { quoteController.current?.abort(); setEditing(null); }} aria-label="Close holding form" data-testid="button-close-holding-form"><X size={16} /></button></div><div className="modal-body"><div className="form-grid"><div className="field full"><label htmlFor="input-holding-stock-search">Find a stock</label><div className="stock-search"><Search size={15} aria-hidden="true" /><input id="input-holding-stock-search" className="input" placeholder="Search by company, ticker, or alias…" autoComplete="off" role="combobox" aria-autocomplete="list" aria-expanded={suggestionsOpen && suggestions.length > 0} aria-controls={suggestionId} aria-activedescendant={suggestionsOpen && suggestions.length ? `${suggestionId}-${activeSuggestion}` : undefined} value={stockQuery} onFocus={() => setSuggestionsOpen(true)} onBlur={() => setSuggestionsOpen(false)} onChange={(e) => { quoteController.current?.abort(); selectedStockRef.current = null; setStockQuery(e.target.value); setSuggestionsOpen(true); setActiveSuggestion(0); setDraft((current) => ({ ...current, symbol: '', name: '', currentPrice: 0 })); setQuoteStatus('idle'); setQuoteMessage(''); }} onKeyDown={(e) => { if (!suggestionsOpen || !suggestions.length) return; if (e.key === 'ArrowDown') { e.preventDefault(); setActiveSuggestion((i) => (i + 1) % suggestions.length); } else if (e.key === 'ArrowUp') { e.preventDefault(); setActiveSuggestion((i) => (i - 1 + suggestions.length) % suggestions.length); } else if (e.key === 'Enter') { e.preventDefault(); selectStock(suggestions[activeSuggestion]); } else if (e.key === 'Escape') setSuggestionsOpen(false); }} data-testid="input-holding-stock-search" />{suggestionsOpen && stockQuery.trim() && <div className="stock-suggestions" id={suggestionId} role="listbox" aria-label="Stock suggestions">{suggestions.length ? suggestions.map((stock, index) => <button type="button" id={`${suggestionId}-${index}`} role="option" aria-selected={index === activeSuggestion} className={`stock-suggestion ${index === activeSuggestion ? 'active' : ''}`} key={`${stock.market}-${stock.symbol}`} onMouseDown={(e) => e.preventDefault()} onMouseEnter={() => setActiveSuggestion(index)} onClick={() => selectStock(stock)}><span className="stock-suggestion-main"><strong>{stock.name}</strong><span>{stock.symbol}</span></span><span className="tag">{stock.market}</span></button>) : <div className="stock-suggestion-empty">{isSearchingStocks ? 'Searching stocks…' : 'No matches found.'}</div>}</div>}</div><span className="row-caption">Search the India and US market symbol directory.{stockSearchMessage ? ` ${stockSearchMessage}` : ''}</span></div><div className="field"><label>Shares</label><input className="input" type="number" min="0.01" step="0.01" value={draft.shares || ''} onChange={(e) => set('shares', Number(e.target.value))} data-testid="input-holding-shares" /></div><div className="field"><label>Purchase price ({currency})</label><input className="input" type="number" min="0" step="0.01" value={draft.purchasePrice || ''} onChange={(e) => set('purchasePrice', Number(e.target.value))} data-testid="input-holding-purchase-price" /></div><div className="field full"><label>Latest available price</label><div className="quote-field" aria-live="polite">{quoteStatus === 'loading' ? 'Looking up latest price…' : quoteStatus === 'error' ? <><span>{quoteMessage}</span><input className="input quote-manual-input" type="number" min="0" step="0.01" aria-label="Enter latest price manually" placeholder={`Enter price (${currency})`} value={draft.currentPrice || ''} onChange={(event) => { set('currentPrice', Number(event.target.value)); setQuoteAsOf('Manually entered'); setDraft((current) => ({ ...current, currentPriceAsOf: 'Manual' })); setQuoteStatus('loaded'); }} /><button type="button" className="btn btn-quiet btn-small" disabled={!draft.symbol} onClick={() => { const stock = selectedStockRef.current; if (stock) selectStock(stock); }}>Try again</button></> : draft.currentPrice > 0 ? <><strong>{formatPrice(draft.currentPrice)}</strong><span>{quoteAsOf === 'Manually entered' ? 'Price entered manually.' : quoteAsOf ? `Latest quote for ${quoteAsOf}; may be delayed.` : 'Saved price snapshot.'}</span></> : 'Select a stock to fetch its latest available price.'}</div></div></div><div className="modal-actions"><button className="btn btn-quiet" onClick={() => { quoteController.current?.abort(); setEditing(null); }} data-testid="button-cancel-holding">Cancel</button><button className="btn btn-primary" disabled={!draft.symbol || !draft.name || draft.shares <= 0 || draft.purchasePrice <= 0 || draft.currentPrice <= 0 || quoteStatus === 'loading' || (currency === 'USD' && (draft.fxToInr || 1) === 1)} onClick={() => { editing === 'new' ? addHolding(draft) : updateHolding(editing.id, draft); setEditing(null); }} data-testid="button-save-holding"><Check size={14} /> Save position</button></div></div></div></div>}
   </main>;
 }
 
@@ -671,7 +743,7 @@ function Reports() {
   const [toast, setToast] = useState('');
   const income = transactions.filter((t) => t.type === 'Income').reduce((s, t) => s + t.amount, 0);
   const expense = transactions.filter((t) => t.type === 'Expense').reduce((s, t) => s + t.amount, 0);
-  const portfolio = holdings.reduce((s, h) => s + h.shares * h.currentPrice, 0);
+  const portfolio = holdings.reduce((s, h) => s + holdingValueInr(h), 0);
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(''), 2600); };
   const download = (content: string, filename: string, type: string) => { const blob = new Blob([content], { type }); const url = URL.createObjectURL(blob); const anchor = document.createElement('a'); anchor.href = url; anchor.download = filename; anchor.click(); URL.revokeObjectURL(url); };
   const downloadCsv = () => { const csv = ['date,description,amount,type,category', ...transactions.map((t) => [t.date, `"${t.description.replaceAll('"', '""')}"`, t.amount, t.type, t.category].join(','))].join('\n'); download(csv, 'finsco-transactions.csv', 'text/csv'); notify('Transaction CSV downloaded'); };
