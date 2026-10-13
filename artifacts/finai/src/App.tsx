@@ -21,8 +21,70 @@ const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
 const clerkPubKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 
 type ThemePreference = 'light' | 'dark' | 'system';
+type DisplayCurrency = 'INR' | 'USD';
 type ThemeContextValue = { theme: ThemePreference; setTheme: (theme: ThemePreference) => void };
 const ThemeContext = createContext<ThemeContextValue | null>(null);
+type CurrencyContextValue = { currency: DisplayCurrency; setCurrency: (currency: DisplayCurrency) => Promise<void>; fxToInr: number; fxAsOf: string; currencyError: string };
+const CurrencyContext = createContext<CurrencyContextValue | null>(null);
+
+async function fetchUsdInrRate() {
+  const response = await fetch(`${basePath}/api/stocks/fx-rate`);
+  const data = await response.json() as { rate?: number; date?: string; error?: string };
+  if (!response.ok || !Number.isFinite(data.rate) || !data.rate || data.rate <= 0) throw new Error(data.error || 'The USD exchange rate is unavailable.');
+  return { rate: data.rate, date: data.date || '' };
+}
+
+function readSavedFxRate() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('finsco-usd-inr-rate') || 'null') as { rate?: number; date?: string } | null;
+    return saved && Number.isFinite(saved.rate) && saved.rate! > 0 ? { rate: saved.rate!, date: saved.date || '' } : null;
+  } catch { return null; }
+}
+
+function CurrencyProvider({ children }: { children: ReactNode }) {
+  const [savedFx] = useState(readSavedFxRate);
+  const [currency, setCurrencyState] = useState<DisplayCurrency>(() => {
+    try { return localStorage.getItem('finsco-display-currency') === 'USD' && readSavedFxRate() ? 'USD' : 'INR'; }
+    catch { return 'INR'; }
+  });
+  const [fxToInr, setFxToInr] = useState(savedFx?.rate || 0);
+  const [fxAsOf, setFxAsOf] = useState(savedFx?.date || '');
+  const [currencyError, setCurrencyError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    void fetchUsdInrRate().then((fx) => {
+      if (!active) return;
+      setFxToInr(fx.rate); setFxAsOf(fx.date);
+      try { localStorage.setItem('finsco-usd-inr-rate', JSON.stringify(fx)); } catch { /* Keep the fetched rate for this session. */ }
+    }).catch(() => { /* INR remains available if the exchange-rate service is offline. */ });
+    return () => { active = false; };
+  }, []);
+
+  const setCurrency = async (next: DisplayCurrency) => {
+    setCurrencyError('');
+    if (next === 'USD' && fxToInr <= 0) {
+      try {
+        const fx = await fetchUsdInrRate();
+        setFxToInr(fx.rate); setFxAsOf(fx.date);
+        try { localStorage.setItem('finsco-usd-inr-rate', JSON.stringify(fx)); } catch { /* Keep the fetched rate for this session. */ }
+      } catch (error) {
+        setCurrencyError(error instanceof Error ? error.message : 'The USD exchange rate is unavailable.');
+        return;
+      }
+    }
+    setCurrencyState(next);
+    try { localStorage.setItem('finsco-display-currency', next); } catch { /* Keep the preference for this session. */ }
+  };
+
+  return <CurrencyContext.Provider value={{ currency, setCurrency, fxToInr, fxAsOf, currencyError }}>{children}</CurrencyContext.Provider>;
+}
+
+function useCurrency() {
+  const value = useContext(CurrencyContext);
+  if (!value) throw new Error('Currency context is unavailable');
+  return value;
+}
 
 function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useState<ThemePreference>(() => {
@@ -52,6 +114,7 @@ function ThemeProvider({ children }: { children: ReactNode }) {
       systemPreference.addEventListener('change', applyTheme);
       return () => systemPreference.removeEventListener('change', applyTheme);
     }
+    return undefined;
   }, [theme]);
 
   return <ThemeContext.Provider value={{ theme, setTheme }}>{children}</ThemeContext.Provider>;
@@ -149,8 +212,12 @@ type Transaction = { id: string; date: string; description: string; amount: numb
 type Holding = { id: string; symbol: string; name: string; shares: number; purchasePrice: number; currentPrice: number; currency?: string; fxToInr?: number; fxAsOf?: string; currentPriceAsOf?: string };
 
 const categories: Category[] = ['Food', 'Shopping', 'Transportation', 'Bills', 'Entertainment', 'Healthcare', 'Education', 'Investment', 'Rent', 'Salary', 'Other'];
-const money = (value: number) => `₹${Math.abs(value).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
-const money2 = (value: number) => `₹${Math.abs(value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+function useMoney() {
+  const { currency, fxToInr } = useCurrency();
+  return (valueInr: number, fractionDigits = 0) => new Intl.NumberFormat(currency === 'INR' ? 'en-IN' : 'en-US', {
+    style: 'currency', currency, minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits,
+  }).format(Math.abs(currency === 'USD' ? valueInr / (fxToInr || 1) : valueInr));
+}
 const holdingFxToInr = (holding: Pick<Holding, 'currency' | 'fxToInr'>) => holding.currency === 'USD' ? holding.fxToInr || 1 : 1;
 const holdingValueInr = (holding: Holding) => holding.shares * holding.currentPrice * holdingFxToInr(holding);
 const holdingCostInr = (holding: Holding) => holding.shares * holding.purchasePrice * holdingFxToInr(holding);
@@ -288,6 +355,7 @@ function Shell({ children }: { children: ReactNode }) {
   const { signOut } = useClerk();
   const { user } = useUser();
   const { theme, setTheme } = useTheme();
+  const { currency, setCurrency, fxAsOf, currencyError } = useCurrency();
   const ThemeIcon = theme === 'light' ? Sun : theme === 'dark' ? Moon : Monitor;
   const pageTitle = navItems.find((item) => item.href === location)?.label || 'Dashboard';
   const email = user?.primaryEmailAddress?.emailAddress || '';
@@ -319,6 +387,20 @@ function Shell({ children }: { children: ReactNode }) {
             <div><div className="topbar-kicker">Fin$co / Workspace</div><div className="topbar-title">{pageTitle}</div></div>
           </div>
           <div className="topbar-actions">
+            <label className="currency-control" title={currency === 'USD' && fxAsOf ? `USD conversion uses a daily reference rate dated ${fxAsOf}` : 'Choose the currency used to display amounts'}>
+              <CircleDollarSign size={14} aria-hidden="true" />
+              <select
+                className="currency-select"
+                aria-label="Display currency"
+                value={currency}
+                onChange={(event) => void setCurrency(event.target.value as DisplayCurrency)}
+                data-testid="select-currency"
+              >
+                <option value="INR">INR ₹</option>
+                <option value="USD">USD $</option>
+              </select>
+            </label>
+            {currencyError && <span className="currency-error" role="status">{currencyError}</span>}
             <label className="theme-control">
               <ThemeIcon size={14} aria-hidden="true" />
               <select
@@ -353,6 +435,7 @@ function MetricCard({ label, value, foot, tone = '' }: { label: string; value: s
 }
 
 function Dashboard() {
+  const money = useMoney();
   const { transactions, holdings, resetDemo } = useFinance();
   const [toast, setToast] = useState('');
   const totalIncome = transactions.filter((t) => t.type === 'Income').reduce((sum, t) => sum + t.amount, 0);
@@ -393,7 +476,7 @@ function Dashboard() {
     <div className="dashboard-grid">
       <section className="card wide">
         <div className="card-header"><div><h2>Cashflow, at a glance</h2><p>Income against expense across the last six months</p></div><span className="period-chip">6 month view</span></div>
-        <div className="card-body"><div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><AreaChart data={months} margin={{ top: 10, right: 5, left: -20, bottom: 0 }}><defs><linearGradient id="incomeFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#2f8c79" stopOpacity={.24} /><stop offset="100%" stopColor="#2f8c79" stopOpacity={0} /></linearGradient><linearGradient id="expenseFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#e9785f" stopOpacity={.18} /><stop offset="100%" stopColor="#e9785f" stopOpacity={0} /></linearGradient></defs><CartesianGrid vertical={false} stroke="#e7e1d6" /><XAxis dataKey="month" axisLine={false} tickLine={false} /><YAxis axisLine={false} tickLine={false} tickFormatter={(v) => `₹${Math.round(v / 1000)}k`} /><Tooltip contentStyle={{ background: '#24343e', border: 0, borderRadius: 8, color: '#fbf7ed', fontSize: 11 }} formatter={(value: number) => [money(value), '']} /><Area type="monotone" dataKey="income" name="Income" stroke="#2f8c79" strokeWidth={2.5} fill="url(#incomeFill)" /><Area type="monotone" dataKey="expense" name="Expense" stroke="#e9785f" strokeWidth={2.2} fill="url(#expenseFill)" /></AreaChart></ResponsiveContainer></div></div>
+        <div className="card-body"><div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><AreaChart data={months} margin={{ top: 10, right: 5, left: -20, bottom: 0 }}><defs><linearGradient id="incomeFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#2f8c79" stopOpacity={.24} /><stop offset="100%" stopColor="#2f8c79" stopOpacity={0} /></linearGradient><linearGradient id="expenseFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#e9785f" stopOpacity={.18} /><stop offset="100%" stopColor="#e9785f" stopOpacity={0} /></linearGradient></defs><CartesianGrid vertical={false} stroke="#e7e1d6" /><XAxis dataKey="month" axisLine={false} tickLine={false} /><YAxis axisLine={false} tickLine={false} tickFormatter={(v) => money(v)} /><Tooltip contentStyle={{ background: '#24343e', border: 0, borderRadius: 8, color: '#fbf7ed', fontSize: 11 }} formatter={(value: number) => [money(value), '']} /><Area type="monotone" dataKey="income" name="Income" stroke="#2f8c79" strokeWidth={2.5} fill="url(#incomeFill)" /><Area type="monotone" dataKey="expense" name="Expense" stroke="#e9785f" strokeWidth={2.2} fill="url(#expenseFill)" /></AreaChart></ResponsiveContainer></div></div>
       </section>
       <section className="card insight-card"><div className="card-body"><div className="eyebrow"><Sparkles size={12} style={{ verticalAlign: 'middle', marginRight: 5 }} /> Fin$co read</div><div className="insight-copy">{totalIncome > totalExpense ? 'You are building a healthy buffer this cycle.' : 'Your outflow is asking for a closer look this cycle.'}</div><div className="accent-line" /><p style={{ color: 'hsl(211 12% 74%)', fontSize: 11, lineHeight: 1.5, margin: '14px 0 0' }}>{categoryData[0] ? `${categoryData[0].name} leads spending at ${money(categoryData[0].value)}. Open the insights view for the full story.` : 'Add a few transactions and the pattern engine will start working.'}</p></div></section>
       <section className="card"><div className="card-header"><div><h2>Spending shape</h2><p>Where your money is going</p></div><Link href="/analyzer" className="tag teal" data-testid="link-view-analyzer">Explore</Link></div><div className="card-body"><div style={{ height: 135 }}><ResponsiveContainer width="100%" height="100%"><RePieChart><Pie data={categoryData} dataKey="value" innerRadius={39} outerRadius={59} paddingAngle={3} stroke="none">{categoryData.map((_, index) => <Cell key={index} fill={['#2f8c79', '#e9785f', '#d4a843', '#718b9a', '#a6b5a4'][index % 5]} />)}</Pie><Tooltip formatter={(value: number) => money(value)} contentStyle={{ background: '#24343e', border: 0, borderRadius: 8, color: '#fbf7ed', fontSize: 10 }} /></RePieChart></ResponsiveContainer></div><div className="donut-legend">{categoryData.slice(0, 3).map((item, index) => <div className="legend-line" key={item.name}><span className={`category-dot ${index === 1 ? 'coral' : index === 2 ? 'gold' : ''}`} /><span style={{ width: 77 }}>{item.name}</span><div className="bar-track"><div className="bar-fill" style={{ width: `${Math.max(10, item.value / (categoryData[0]?.value || 1) * 100)}%`, background: ['#2f8c79', '#e9785f', '#d4a843'][index] }} /></div></div>)}</div></div></section>
@@ -405,7 +488,8 @@ function Dashboard() {
 }
 
 function TransactionTable({ transactions, onEdit, onDelete, compact = false }: { transactions: Transaction[]; onEdit?: (transaction: Transaction) => void; onDelete?: (id: string) => void; compact?: boolean }) {
-  return <div className="table-wrap"><table><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Type</th><th style={{ textAlign: 'right' }}>Amount</th>{!compact && <th />}</tr></thead><tbody>{transactions.map((transaction) => <tr key={transaction.id} data-testid={`row-transaction-${transaction.id}`}><td className="mono" style={{ color: 'hsl(var(--muted-foreground))', fontSize: 10 }}>{shortDate(transaction.date)}</td><td><strong>{transaction.description}</strong></td><td><span className="tag">{transaction.category}</span></td><td><span className={`tag ${transaction.type === 'Income' ? 'teal' : 'coral'}`}>{transaction.type}</span></td><td className={`amount ${transaction.type.toLowerCase()}`} style={{ textAlign: 'right' }}>{transaction.type === 'Income' ? '+' : '-'}{money2(transaction.amount)}</td>{!compact && <td><div className="actions"><button className="action-icon" onClick={() => onEdit?.(transaction)} aria-label={`Edit ${transaction.description}`} data-testid={`button-edit-${transaction.id}`}><Pencil size={14} /></button><button className="action-icon delete" onClick={() => onDelete?.(transaction.id)} aria-label={`Delete ${transaction.description}`} data-testid={`button-delete-${transaction.id}`}><Trash2 size={14} /></button></div></td>}</tr>)}</tbody></table>{transactions.length === 0 && <div className="empty"><div className="empty-icon"><FolderOpen size={18} /></div><h3>No transactions match.</h3><p>Try widening your filters or add a new entry to the ledger.</p></div>}</div>;
+  const money = useMoney();
+  return <div className="table-wrap"><table><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Type</th><th style={{ textAlign: 'right' }}>Amount</th>{!compact && <th />}</tr></thead><tbody>{transactions.map((transaction) => <tr key={transaction.id} data-testid={`row-transaction-${transaction.id}`}><td className="mono" style={{ color: 'hsl(var(--muted-foreground))', fontSize: 10 }}>{shortDate(transaction.date)}</td><td><strong>{transaction.description}</strong></td><td><span className="tag">{transaction.category}</span></td><td><span className={`tag ${transaction.type === 'Income' ? 'teal' : 'coral'}`}>{transaction.type}</span></td><td className={`amount ${transaction.type.toLowerCase()}`} style={{ textAlign: 'right' }}>{transaction.type === 'Income' ? '+' : '-'}{money(transaction.amount, 2)}</td>{!compact && <td><div className="actions"><button className="action-icon" onClick={() => onEdit?.(transaction)} aria-label={`Edit ${transaction.description}`} data-testid={`button-edit-${transaction.id}`}><Pencil size={14} /></button><button className="action-icon delete" onClick={() => onDelete?.(transaction.id)} aria-label={`Delete ${transaction.description}`} data-testid={`button-delete-${transaction.id}`}><Trash2 size={14} /></button></div></td>}</tr>)}</tbody></table>{transactions.length === 0 && <div className="empty"><div className="empty-icon"><FolderOpen size={18} /></div><h3>No transactions match.</h3><p>Try widening your filters or add a new entry to the ledger.</p></div>}</div>;
 }
 
 type TransactionDraft = Omit<Transaction, 'id'>;
@@ -472,6 +556,7 @@ function csvAmount(value: string) {
 }
 
 function AddTransactions() {
+  const money = useMoney();
   const { transactions, addTransaction, updateTransaction, deleteTransaction } = useFinance();
   const [modal, setModal] = useState<Transaction | 'new' | null>(null);
   const [toast, setToast] = useState('');
@@ -528,7 +613,7 @@ function AddTransactions() {
       <section className="card"><div className="card-header"><div><h2>Import a CSV</h2><p>Expected columns: date, description, amount, type, category</p></div><FileSpreadsheet size={19} color="hsl(var(--primary))" /></div><div className="card-body"><div className={`dropzone${isDraggingCsv ? ' dragging' : ''}`} onDragEnter={(event) => { event.preventDefault(); setIsDraggingCsv(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsDraggingCsv(false); }} onDrop={(event) => { event.preventDefault(); setIsDraggingCsv(false); handleFile(event.dataTransfer.files?.[0]); }}><Upload size={22} /><strong>Drop your transaction file here</strong><p>We validate each row in your browser before import.</p><button type="button" className="btn btn-quiet btn-small" onClick={() => inputRef.current?.click()} data-testid="button-choose-csv"><FolderOpen size={13} /> Choose CSV</button><input id="csv-upload" ref={inputRef} type="file" accept=".csv,text/csv" onChange={(event) => { handleFile(event.currentTarget.files?.[0]); event.currentTarget.value = ''; }} data-testid="input-csv-upload" /></div></div></section>
       <section className="card card-pad"><div className="eyebrow">Quick read</div><div className="kpi-row" style={{ marginTop: 14 }}><div className="kpi-big">{transactions.length}</div><span className="tag teal">ledger rows</span></div><p className="subhead" style={{ fontSize: 11, marginTop: 10 }}>Your local workspace is persisted automatically. Nothing leaves this browser.</p><button className="btn btn-quiet btn-small" onClick={() => { inputRef.current?.click(); }} data-testid="button-browse-csv"><Upload size={13} /> Browse files</button></section>
     </div>
-    {csvRows.length > 0 && <section className="card" style={{ marginBottom: 15 }}><div className="card-header"><div><h2>Import preview</h2><p>{csvRows.filter((r) => r.valid).length} valid of {csvRows.length} rows</p></div><div style={{ display: 'flex', gap: 8 }}><button className="btn btn-quiet btn-small" onClick={() => setCsvRows([])} data-testid="button-cancel-csv">Discard</button><button className="btn btn-primary btn-small" disabled={!csvRows.some((row) => row.valid)} onClick={importCsv} data-testid="button-import-csv"><Check size={13} /> Import valid rows</button></div></div><div className="card-body"><div className="table-wrap"><table><thead><tr><th>Status</th><th>Date</th><th>Description</th><th>Amount</th><th>Category</th><th>Validation</th></tr></thead><tbody>{csvRows.map((row, index) => <tr key={index}><td>{row.valid ? <span className="tag teal">Ready</span> : <span className="tag coral">Review</span>}</td><td className="mono">{row.date}</td><td>{row.description || '—'}</td><td className="amount">{money2(row.amount)}</td><td><span className="tag">{row.category}</span></td><td style={{ color: 'hsl(var(--muted-foreground))', fontSize: 10 }}>{row.reason || 'Category confidence: inferred'}</td></tr>)}</tbody></table></div></div></section>}
+    {csvRows.length > 0 && <section className="card" style={{ marginBottom: 15 }}><div className="card-header"><div><h2>Import preview</h2><p>{csvRows.filter((r) => r.valid).length} valid of {csvRows.length} rows</p></div><div style={{ display: 'flex', gap: 8 }}><button className="btn btn-quiet btn-small" onClick={() => setCsvRows([])} data-testid="button-cancel-csv">Discard</button><button className="btn btn-primary btn-small" disabled={!csvRows.some((row) => row.valid)} onClick={importCsv} data-testid="button-import-csv"><Check size={13} /> Import valid rows</button></div></div><div className="card-body"><div className="table-wrap"><table><thead><tr><th>Status</th><th>Date</th><th>Description</th><th>Amount</th><th>Category</th><th>Validation</th></tr></thead><tbody>{csvRows.map((row, index) => <tr key={index}><td>{row.valid ? <span className="tag teal">Ready</span> : <span className="tag coral">Review</span>}</td><td className="mono">{row.date}</td><td>{row.description || '—'}</td><td className="amount">{money(row.amount, 2)}</td><td><span className="tag">{row.category}</span></td><td style={{ color: 'hsl(var(--muted-foreground))', fontSize: 10 }}>{row.reason || 'Category confidence: inferred'}</td></tr>)}</tbody></table></div></div></section>}
     <section className="card"><div className="card-header"><div><h2>Ledger</h2><p>{transactions.length} entries, newest first</p></div><span className="tag">{transactions.filter((t) => t.type === 'Expense').length} outflows</span></div><div className="card-body" style={{ paddingTop: 13 }}><TransactionTable transactions={sorted} onEdit={setModal} onDelete={(id) => { if (window.confirm('Delete this transaction?')) { deleteTransaction(id); notify('Transaction removed'); } }} /></div></section>
     {modal && <TransactionModal initial={modal === 'new' ? undefined : modal} onClose={() => setModal(null)} onSave={(draft) => { modal === 'new' ? addTransaction(draft) : updateTransaction(modal.id, draft); setModal(null); notify(modal === 'new' ? 'Transaction added' : 'Changes saved'); }} />}
     {toast && <div className="toast"><Check size={15} />{toast}</div>}
@@ -536,6 +621,7 @@ function AddTransactions() {
 }
 
 function ExpenseAnalyzer() {
+  const money = useMoney();
   const { transactions } = useFinance();
   const expenses = transactions.filter((t) => t.type === 'Expense');
   const [query, setQuery] = useState('');
@@ -553,12 +639,13 @@ function ExpenseAnalyzer() {
   return <main className="page"><PageHead eyebrow="Analyzer / patterns in the ledger" title="Make spending make sense." description="Slice the same live dataset by time, category, and search. Every visual below updates as your local ledger changes." action={<button className="btn btn-quiet" onClick={() => { setQuery(''); setCategory('All'); setRange('All time'); }} data-testid="button-reset-filters"><RefreshCw size={14} /> Reset filters</button>} />
     <section className="card card-pad" style={{ marginBottom: 15 }}><div className="filters"><div className="search-wrap"><Search size={14} /><input className="input" placeholder="Search descriptions or categories" value={query} onChange={(e) => setQuery(e.target.value)} data-testid="input-search-expenses" /></div><select className="select" value={category} onChange={(e) => setCategory(e.target.value)} data-testid="select-filter-category"><option>All</option>{categories.map((item) => <option key={item}>{item}</option>)}</select><select className="select" value={range} onChange={(e) => setRange(e.target.value)} data-testid="select-filter-range"><option>All time</option><option>30 days</option><option>90 days</option></select><span className="tag">{filtered.length} matching</span></div></section>
     <div className="stats-grid"><MetricCard label="Filtered spend" value={money(filtered.reduce((s, t) => s + t.amount, 0))} foot={`${range.toLowerCase()} · ${category}`} /><MetricCard label="Average expense" value={money(filtered.length ? filtered.reduce((s, t) => s + t.amount, 0) / filtered.length : 0)} foot="Per matching transaction" /><MetricCard label="Largest category" value={byCategory[0]?.name || '—'} foot={byCategory[0] ? money(byCategory[0].amount) : 'No matches'} tone="positive" /><MetricCard label="Largest single outflow" value={money(Math.max(0, ...filtered.map((t) => t.amount)))} foot={filtered.length ? 'Review this item in the ledger' : 'No matches'} tone="warn" /></div>
-    <div className="dashboard-grid"><section className="card wide"><div className="card-header"><div><h2>Spending pulse</h2><p>Daily outflow in the current filter</p></div><Activity size={17} color="hsl(var(--primary))" /></div><div className="card-body"><div className="chart-wrap tall"><ResponsiveContainer width="100%" height="100%"><BarChart data={daily} margin={{ top: 8, right: 6, left: -20, bottom: 0 }}><CartesianGrid vertical={false} stroke="#e7e1d6" /><XAxis dataKey="date" axisLine={false} tickLine={false} /><YAxis axisLine={false} tickLine={false} tickFormatter={(v) => `₹${Math.round(v / 1000)}k`} /><Tooltip contentStyle={{ background: '#24343e', border: 0, borderRadius: 8, color: '#fbf7ed', fontSize: 11 }} formatter={(value: number) => [money(value), 'Spend']} /><Bar dataKey="amount" fill="#2f8c79" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></div></div></section><section className="card"><div className="card-header"><div><h2>Category weight</h2><p>Relative share of selected spend</p></div><PieChart size={17} color="hsl(var(--primary))" /></div><div className="card-body"><div className="list">{byCategory.slice(0, 7).map((item, index) => <div key={item.name}><div className="list-row" style={{ marginBottom: 6 }}><div className="row-meta"><span className={`category-dot ${index === 1 ? 'coral' : index === 2 ? 'gold' : ''}`} /><span className="row-name">{item.name}</span></div><span className="row-value">{money(item.amount)}</span></div><div className="bar-track"><div className="bar-fill" style={{ width: `${item.amount / maxCategory * 100}%`, background: index === 1 ? 'hsl(var(--accent))' : index === 2 ? 'hsl(39 73% 54%)' : undefined }} /></div></div>)}{byCategory.length === 0 && <p className="subhead">No category data in this filter.</p>}</div></div></section></div>
+    <div className="dashboard-grid"><section className="card wide"><div className="card-header"><div><h2>Spending pulse</h2><p>Daily outflow in the current filter</p></div><Activity size={17} color="hsl(var(--primary))" /></div><div className="card-body"><div className="chart-wrap tall"><ResponsiveContainer width="100%" height="100%"><BarChart data={daily} margin={{ top: 8, right: 6, left: -20, bottom: 0 }}><CartesianGrid vertical={false} stroke="#e7e1d6" /><XAxis dataKey="date" axisLine={false} tickLine={false} /><YAxis axisLine={false} tickLine={false} tickFormatter={(v) => money(v)} /><Tooltip contentStyle={{ background: '#24343e', border: 0, borderRadius: 8, color: '#fbf7ed', fontSize: 11 }} formatter={(value: number) => [money(value), 'Spend']} /><Bar dataKey="amount" fill="#2f8c79" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer></div></div></section><section className="card"><div className="card-header"><div><h2>Category weight</h2><p>Relative share of selected spend</p></div><PieChart size={17} color="hsl(var(--primary))" /></div><div className="card-body"><div className="list">{byCategory.slice(0, 7).map((item, index) => <div key={item.name}><div className="list-row" style={{ marginBottom: 6 }}><div className="row-meta"><span className={`category-dot ${index === 1 ? 'coral' : index === 2 ? 'gold' : ''}`} /><span className="row-name">{item.name}</span></div><span className="row-value">{money(item.amount)}</span></div><div className="bar-track"><div className="bar-fill" style={{ width: `${item.amount / maxCategory * 100}%`, background: index === 1 ? 'hsl(var(--accent))' : index === 2 ? 'hsl(39 73% 54%)' : undefined }} /></div></div>)}{byCategory.length === 0 && <p className="subhead">No category data in this filter.</p>}</div></div></section></div>
     <section className="card" style={{ marginTop: 15 }}><div className="card-header"><div><h2>Searchable expense detail</h2><p>Showing {filtered.length} of {expenses.length} expense rows</p></div><Filter size={17} color="hsl(var(--muted-foreground))" /></div><div className="card-body" style={{ paddingTop: 13 }}><TransactionTable transactions={filtered} compact /></div></section>
   </main>;
 }
 
 function AIAnalysis() {
+  const money = useMoney();
   const { transactions } = useFinance();
   const expenses = transactions.filter((t) => t.type === 'Expense');
   const [sampleDescription, setSampleDescription] = useState('Swiggy dinner');
@@ -614,6 +701,7 @@ const stockSuggestions: StockSuggestion[] = [
 ];
 
 function Portfolio() {
+  const money = useMoney();
   const { holdings, addHolding, updateHolding, deleteHolding } = useFinance();
   const [editing, setEditing] = useState<Holding | 'new' | null>(null);
   const [draft, setDraft] = useState<HoldingDraft>({ symbol: '', name: '', shares: 1, purchasePrice: 0, currentPrice: 0, currency: 'INR', fxToInr: 1 });
@@ -709,7 +797,7 @@ function Portfolio() {
       });
   };
   const currency = draft.currency || 'INR';
-  const formatPrice = (value: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency, maximumFractionDigits: 2 }).format(value);
+  const formatPrice = (value: number) => money(value * (currency === 'USD' ? draft.fxToInr || 1 : 1), 2);
   return <main className="page"><PageHead eyebrow="Portfolio / market quotes" title="See your ownership clearly." description="Search India and US stocks, enter your shares and purchase price, and compare them with the latest available market quote." action={<button className="btn btn-primary" onClick={() => open()} data-testid="button-new-holding"><Plus size={15} /> Add holding</button>} />
     <div className="stats-grid"><MetricCard label="Current value" value={money(currentValue)} foot={`${holdings.length} holdings tracked`} tone="positive" /><MetricCard label="Cost basis" value={money(totalInvested)} foot="Total purchase value" /><MetricCard label="Unrealized P&L" value={`${pnl >= 0 ? '+' : '-'}${money(pnl)}`} foot={totalInvested ? `${pnl / totalInvested * 100 >= 0 ? '+' : ''}${(pnl / totalInvested * 100).toFixed(1)}% since purchase` : 'Add a holding'} tone={pnl >= 0 ? 'positive' : 'warn'} /><MetricCard label="Largest position" value={holdings[0]?.symbol || '—'} foot={holdings[0] ? money(holdingValueInr(holdings[0])) : 'No holdings'} /></div>
     <div className="allocation-layout"><section className="card"><div className="card-header"><div><h2>Allocation</h2><p>Current value by holding</p></div><PieChart size={17} color="hsl(var(--primary))" /></div><div className="card-body"><div style={{ height: 190 }}><ResponsiveContainer width="100%" height="100%"><RePieChart><Pie data={holdings.map((h) => ({ name: h.symbol, value: holdingValueInr(h) }))} dataKey="value" innerRadius={52} outerRadius={75} paddingAngle={3} stroke="none">{holdings.map((h, i) => <Cell key={h.id} fill={['#2f8c79', '#e9785f', '#d4a843', '#718b9a'][i % 4]} />)}</Pie><Tooltip formatter={(value: number) => money(value)} contentStyle={{ background: '#24343e', border: 0, borderRadius: 8, color: '#fbf7ed', fontSize: 10 }} /></RePieChart></ResponsiveContainer></div><div className="list">{holdings.map((h, i) => <div className="list-row" key={h.id}><div className="row-meta"><span className="category-dot" style={{ background: ['#2f8c79', '#e9785f', '#d4a843', '#718b9a'][i % 4] }} /><span className="row-name">{h.symbol}</span></div><span className="row-value">{money(holdingValueInr(h))}</span></div>)}</div>{holdings.length === 0 && <div className="empty"><div className="empty-icon"><BriefcaseBusiness size={18} /></div><p>Add your first holding to see allocation.</p></div>}</div></section><section className="card"><div className="card-header"><div><h2>Holdings</h2><p>Latest available market prices · may be delayed</p></div><span className="tag teal"><Landmark size={11} /> Market data</span></div><div className="card-body" style={{ paddingTop: 13 }}><div className="table-wrap"><table><thead><tr><th>Asset</th><th>Shares</th><th>Value</th><th>P&amp;L</th><th /></tr></thead><tbody>{holdings.map((h) => { const value = holdingValueInr(h); const gain = value - holdingCostInr(h); return <tr key={h.id} data-testid={`row-holding-${h.id}`}><td><strong>{h.symbol}</strong><div className="row-caption">{h.name} · {h.currency || 'INR'} quote {h.currentPriceAsOf || 'saved'}</div></td><td className="mono">{h.shares}</td><td className="holding-value">{money(value)}</td><td className={gain >= 0 ? 'pnl-positive amount' : 'pnl-negative amount'}>{gain >= 0 ? '+' : '-'}{money(gain)}</td><td><div className="actions"><button className="action-icon" onClick={() => open(h)} aria-label={`Edit ${h.symbol}`} data-testid={`button-edit-holding-${h.id}`}><Pencil size={14} /></button><button className="action-icon delete" onClick={() => { if (window.confirm(`Delete ${h.symbol} holding?`)) deleteHolding(h.id); }} aria-label={`Delete ${h.symbol}`} data-testid={`button-delete-holding-${h.id}`}><Trash2 size={14} /></button></div></td></tr>; })}</tbody></table></div></div></section></div>
@@ -718,6 +806,7 @@ function Portfolio() {
 }
 
 function Insights() {
+  const money = useMoney();
   const { transactions, holdings } = useFinance();
   const expenses = transactions.filter((t) => t.type === 'Expense');
   const income = transactions.filter((t) => t.type === 'Income').reduce((s, t) => s + t.amount, 0);
@@ -739,6 +828,7 @@ function Insights() {
 }
 
 function Reports() {
+  const money = useMoney();
   const { transactions, holdings } = useFinance();
   const [toast, setToast] = useState('');
   const income = transactions.filter((t) => t.type === 'Income').reduce((s, t) => s + t.amount, 0);
@@ -759,6 +849,7 @@ function PrinterIcon() { return <FileBarChart2 size={17} />; }
 function NotFound() { return <main className="page"><section className="card empty"><div className="empty-icon"><Gauge size={19} /></div><h2>That view is not on the map.</h2><p>Use the Fin$co navigation to return to your command center.</p><Link className="btn btn-primary" href="/workspace" data-testid="link-return-dashboard"><LayoutDashboard size={14} /> Return to dashboard</Link></section></main>; }
 
 function PublicLanding() {
+  const money = useMoney();
   return <main className="auth-landing">
     <div className="auth-landing-nav">
       <Link href="/" className="brand auth-brand"><span className="brand-wordmark" role="img" aria-label="Fin$co" /></Link>
@@ -774,11 +865,11 @@ function PublicLanding() {
       </div>
       <div className="auth-hero-panel">
         <div className="auth-panel-kicker">Your financial signal</div>
-        <div className="auth-panel-number">₹28,500</div>
+        <div className="auth-panel-number">{money(28500)}</div>
         <div className="auth-panel-caption">monthly income tracked</div>
         <div className="auth-panel-rule" />
         <div className="auth-panel-row"><span>Largest signal</span><strong>Rent · 31%</strong></div>
-        <div className="auth-panel-row"><span>Buffer this month</span><strong className="auth-positive">+₹12,840</strong></div>
+        <div className="auth-panel-row"><span>Buffer this month</span><strong className="auth-positive">+{money(12840)}</strong></div>
         <div className="auth-panel-bars"><span style={{ height: '45%' }} /><span style={{ height: '62%' }} /><span style={{ height: '54%' }} /><span style={{ height: '78%' }} /><span style={{ height: '69%' }} /><span style={{ height: '91%' }} /></div>
         <div className="auth-panel-footer"><span>Six month view</span><span>Updated locally</span></div>
       </div>
@@ -822,9 +913,9 @@ function App() {
   // Local demo mode bypasses Clerk while keeping the full Clerk setup above
   // intact for later reactivation.
   if (LOCAL_DEMO_MODE) {
-    return <ThemeProvider><WouterRouter base={basePath}><QueryClientProvider client={queryClient}><AppRoutes /></QueryClientProvider></WouterRouter></ThemeProvider>;
+    return <ThemeProvider><CurrencyProvider><WouterRouter base={basePath}><QueryClientProvider client={queryClient}><AppRoutes /></QueryClientProvider></WouterRouter></CurrencyProvider></ThemeProvider>;
   }
-  return <ThemeProvider><WouterRouter base={basePath}><ClerkProviderWithRoutes /></WouterRouter></ThemeProvider>;
+  return <ThemeProvider><CurrencyProvider><WouterRouter base={basePath}><ClerkProviderWithRoutes /></WouterRouter></CurrencyProvider></ThemeProvider>;
 }
 
 export default App;
