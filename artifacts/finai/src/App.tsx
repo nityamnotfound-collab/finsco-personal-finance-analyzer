@@ -415,43 +415,114 @@ function TransactionModal({ initial, onClose, onSave }: { initial?: Transaction;
 }
 
 type CsvRow = TransactionDraft & { valid: boolean; reason?: string };
+
+function parseCsvRecords(text: string): string[][] {
+  const records: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let quoted = false;
+  const source = text.replace(/^\uFEFF/, '');
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === '"') {
+      if (quoted && source[index + 1] === '"') { field += '"'; index += 1; }
+      else quoted = !quoted;
+    } else if (char === ',' && !quoted) {
+      row.push(field.trim()); field = '';
+    } else if ((char === '\n' || char === '\r') && !quoted) {
+      if (char === '\r' && source[index + 1] === '\n') index += 1;
+      row.push(field.trim()); field = '';
+      if (row.some((value) => value !== '')) records.push(row);
+      row = [];
+    } else field += char;
+  }
+  row.push(field.trim());
+  if (row.some((value) => value !== '')) records.push(row);
+  return records;
+}
+
+function csvHeaderKey(value: string) {
+  return value.toLowerCase().replace(/^\uFEFF/, '').replace(/[^a-z0-9]/g, '');
+}
+
+function csvDate(value: string) {
+  const clean = value.trim();
+  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(clean)) {
+    const [year, month, day] = clean.split('-').map(Number);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+      ? `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}` : '';
+  }
+  const match = clean.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})$/);
+  if (!match) return '';
+  const [, first, second, yearText] = match;
+  const day = Number(first); const month = Number(second); const year = Number(yearText);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+    ? `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}` : '';
+}
+
+function csvAmount(value: string) {
+  const cleaned = value.replace(/[₹$£€\s,]/g, '').replace(/^(?:INR|USD|Rs\.?)/i, '').replace(/[()]/g, '');
+  const amount = Number(cleaned);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
 function AddTransactions() {
   const { transactions, addTransaction, updateTransaction, deleteTransaction } = useFinance();
   const [modal, setModal] = useState<Transaction | 'new' | null>(null);
   const [toast, setToast] = useState('');
   const [csvRows, setCsvRows] = useState<CsvRow[]>([]);
+  const [isDraggingCsv, setIsDraggingCsv] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const sorted = useMemo(() => [...transactions].sort((a, b) => b.date.localeCompare(a.date)), [transactions]);
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(''), 2700); };
   const handleFile = (file?: File) => {
     if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.csv') && file.type !== 'text/csv') { notify('Choose a .csv file to import'); return; }
     const reader = new FileReader();
     reader.onload = () => {
-      const lines = String(reader.result || '').split(/\r?\n/).filter(Boolean);
-      if (lines.length < 2) { notify('CSV needs a header and at least one row'); return; }
-      const headers = lines[0].split(',').map((h) => h.trim().toLowerCase());
-      const idx = (name: string) => headers.indexOf(name);
-      const rows = lines.slice(1).map((line): CsvRow => {
-        const values = line.split(',').map((value) => value.trim().replace(/^"|"$/g, ''));
-        const date = values[idx('date')] || '';
-        const description = values[idx('description')] || '';
-        const amount = Number(values[idx('amount')]);
-        const rawType = values[idx('type')] || 'Expense';
-        const type: TransactionType = rawType.toLowerCase() === 'income' ? 'Income' : 'Expense';
-         const rawCategory = values[idx('category')] as Category;
-         const inferred = inferCategory(description);
-         const category = categories.includes(rawCategory) ? rawCategory : inferred.category;
-        const reason = !date || !/^\d{4}-\d{2}-\d{2}$/.test(date) ? 'Use YYYY-MM-DD date' : !description ? 'Description is required' : !amount || amount <= 0 ? 'Amount must be positive' : undefined;
+      const records = parseCsvRecords(String(reader.result || ''));
+      if (records.length < 2) { notify('CSV needs a header and at least one transaction row'); return; }
+      const headers = records[0].map(csvHeaderKey);
+      const findColumn = (...names: string[]) => headers.findIndex((header) => names.includes(header));
+      const dateIndex = findColumn('date', 'transactiondate', 'valuedate', 'postingdate');
+      const descriptionIndex = findColumn('description', 'details', 'narration', 'particulars', 'merchant', 'payee', 'name');
+      const amountIndex = findColumn('amount', 'transactionamount', 'value');
+      const typeIndex = findColumn('type', 'transactiontype', 'drcr', 'debitcredit');
+      const debitIndex = findColumn('debit', 'withdrawal', 'moneyout');
+      const creditIndex = findColumn('credit', 'deposit', 'moneyin');
+      const categoryIndex = findColumn('category');
+      if (dateIndex < 0 || descriptionIndex < 0 || (amountIndex < 0 && debitIndex < 0 && creditIndex < 0)) {
+        setCsvRows([]);
+        notify('Could not find date, description, and amount columns. Check the CSV headers.');
+        return;
+      }
+      const rows = records.slice(1).map((values): CsvRow => {
+        const get = (index: number) => index < 0 ? '' : values[index] || '';
+        const date = csvDate(get(dateIndex));
+        const description = get(descriptionIndex).trim();
+        const debit = csvAmount(get(debitIndex));
+        const credit = csvAmount(get(creditIndex));
+        const rawAmount = csvAmount(get(amountIndex));
+        const rawType = get(typeIndex).toLowerCase();
+        const type: TransactionType = credit > 0 ? 'Income' : debit > 0 ? 'Expense' : /income|credit|deposit|cr\b/.test(rawType) ? 'Income' : 'Expense';
+        const amount = debit > 0 || credit > 0 ? (type === 'Income' ? credit : debit) : Math.abs(rawAmount);
+        const rawCategory = get(categoryIndex) as Category;
+        const inferred = inferCategory(description);
+        const category = categories.includes(rawCategory) ? rawCategory : inferred.category;
+        const reason = !date ? 'Use a valid YYYY-MM-DD or DD/MM/YYYY date' : !description ? 'Description is required' : !amount || amount <= 0 ? 'Amount must be positive' : undefined;
         return { date, description, amount, type, category, valid: !reason, reason };
       });
       setCsvRows(rows); notify(`${rows.length} rows parsed — review before importing`);
     };
+    reader.onerror = () => notify('Could not read this file. Please try another CSV.');
     reader.readAsText(file);
   };
   const importCsv = () => { csvRows.filter((row) => row.valid).forEach(({ valid: _valid, reason: _reason, ...row }) => addTransaction(row)); setCsvRows([]); notify('Valid rows added to your ledger'); };
   return <main className="page"><PageHead eyebrow="Ledger / manual or batch" title="Bring in the real picture." description="Capture the small daily decisions and the large one-offs. Fin$co makes both legible without sending your data anywhere." action={<button className="btn btn-primary" onClick={() => setModal('new')} data-testid="button-new-transaction"><Plus size={15} /> New transaction</button>} />
     <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) 310px', gap: 15, marginBottom: 15 }}>
-      <section className="card"><div className="card-header"><div><h2>Import a CSV</h2><p>Expected columns: date, description, amount, type, category</p></div><FileSpreadsheet size={19} color="hsl(var(--primary))" /></div><div className="card-body"><label className="dropzone" htmlFor="csv-upload"><Upload size={22} /><strong>Drop your transaction file here</strong><p>We validate each row in your browser before import.</p><span className="btn btn-quiet btn-small"><FolderOpen size={13} /> Choose CSV</span><input id="csv-upload" ref={inputRef} type="file" accept=".csv,text/csv" onChange={(e) => handleFile(e.target.files?.[0])} data-testid="input-csv-upload" /></label></div></section>
+      <section className="card"><div className="card-header"><div><h2>Import a CSV</h2><p>Expected columns: date, description, amount, type, category</p></div><FileSpreadsheet size={19} color="hsl(var(--primary))" /></div><div className="card-body"><div className={`dropzone${isDraggingCsv ? ' dragging' : ''}`} onDragEnter={(event) => { event.preventDefault(); setIsDraggingCsv(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsDraggingCsv(false); }} onDrop={(event) => { event.preventDefault(); setIsDraggingCsv(false); handleFile(event.dataTransfer.files?.[0]); }}><Upload size={22} /><strong>Drop your transaction file here</strong><p>We validate each row in your browser before import.</p><button type="button" className="btn btn-quiet btn-small" onClick={() => inputRef.current?.click()} data-testid="button-choose-csv"><FolderOpen size={13} /> Choose CSV</button><input id="csv-upload" ref={inputRef} type="file" accept=".csv,text/csv" onChange={(event) => { handleFile(event.currentTarget.files?.[0]); event.currentTarget.value = ''; }} data-testid="input-csv-upload" /></div></div></section>
       <section className="card card-pad"><div className="eyebrow">Quick read</div><div className="kpi-row" style={{ marginTop: 14 }}><div className="kpi-big">{transactions.length}</div><span className="tag teal">ledger rows</span></div><p className="subhead" style={{ fontSize: 11, marginTop: 10 }}>Your local workspace is persisted automatically. Nothing leaves this browser.</p><button className="btn btn-quiet btn-small" onClick={() => { inputRef.current?.click(); }} data-testid="button-browse-csv"><Upload size={13} /> Browse files</button></section>
     </div>
     {csvRows.length > 0 && <section className="card" style={{ marginBottom: 15 }}><div className="card-header"><div><h2>Import preview</h2><p>{csvRows.filter((r) => r.valid).length} valid of {csvRows.length} rows</p></div><div style={{ display: 'flex', gap: 8 }}><button className="btn btn-quiet btn-small" onClick={() => setCsvRows([])} data-testid="button-cancel-csv">Discard</button><button className="btn btn-primary btn-small" disabled={!csvRows.some((row) => row.valid)} onClick={importCsv} data-testid="button-import-csv"><Check size={13} /> Import valid rows</button></div></div><div className="card-body"><div className="table-wrap"><table><thead><tr><th>Status</th><th>Date</th><th>Description</th><th>Amount</th><th>Category</th><th>Validation</th></tr></thead><tbody>{csvRows.map((row, index) => <tr key={index}><td>{row.valid ? <span className="tag teal">Ready</span> : <span className="tag coral">Review</span>}</td><td className="mono">{row.date}</td><td>{row.description || '—'}</td><td className="amount">{money2(row.amount)}</td><td><span className="tag">{row.category}</span></td><td style={{ color: 'hsl(var(--muted-foreground))', fontSize: 10 }}>{row.reason || 'Category confidence: inferred'}</td></tr>)}</tbody></table></div></div></section>}
