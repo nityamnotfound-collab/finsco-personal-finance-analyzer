@@ -12,15 +12,13 @@ import {
   Pie, PieChart as RePieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import { ClerkProvider, SignIn, SignUp, useClerk as useClerkOriginal, useUser as useUserOriginal } from '@clerk/react';
-import { publishableKeyFromHost } from '@clerk/react/internal';
 import { shadcn } from '@clerk/themes';
 import { Link, Redirect, Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 import { ErrorBoundary } from '@/components/error-boundary';
 
 const queryClient = new QueryClient();
 const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
-const clerkPubKey = publishableKeyFromHost(window.location.hostname, import.meta.env.VITE_CLERK_PUBLISHABLE_KEY);
-const clerkProxyUrl = import.meta.env.VITE_CLERK_PROXY_URL;
+const clerkPubKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
 
 type ThemePreference = 'light' | 'dark' | 'system';
 type ThemeContextValue = { theme: ThemePreference; setTheme: (theme: ThemePreference) => void };
@@ -616,7 +614,7 @@ function AppRoutes() {
 }
 function ClerkProviderWithRoutes() {
   const [, setLocation] = useLocation();
-  return <ClerkProvider publishableKey={clerkPubKey} proxyUrl={clerkProxyUrl} appearance={clerkAppearance} signInUrl={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} localization={{ signIn: { start: { title: 'Welcome back', subtitle: 'Sign in to access your workspace' } }, signUp: { start: { title: 'Create your workspace', subtitle: 'Keep your financial signal in one place' } } }} routerPush={(to) => setLocation(stripBase(to))} routerReplace={(to) => setLocation(stripBase(to), { replace: true })}>
+  return <ClerkProvider publishableKey={clerkPubKey} appearance={clerkAppearance} signInUrl={`${basePath}/sign-in`} signUpUrl={`${basePath}/sign-up`} localization={{ signIn: { start: { title: 'Welcome back', subtitle: 'Sign in to access your workspace' } }, signUp: { start: { title: 'Create your workspace', subtitle: 'Keep your financial signal in one place' } } }} routerPush={(to) => setLocation(stripBase(to))} routerReplace={(to) => setLocation(stripBase(to), { replace: true })}>
     <QueryClientProvider client={queryClient}><AppRoutes /></QueryClientProvider>
   </ClerkProvider>;
 }
